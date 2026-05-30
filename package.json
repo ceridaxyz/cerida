@@ -1,0 +1,11 @@
+{
+  "name": "cerida",
+  "private": true,
+  "workspaces": ["app", "server", "workers"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:app": "bun run --filter app dev",
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test"
+  }
+}

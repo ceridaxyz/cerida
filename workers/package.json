@@ -1,0 +1,10 @@
+{
+  "name": "@cerida/workers",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'TODO: add dev script'",
+    "build": "echo 'TODO: add build script'",
+    "test": "bun test"
+  }
+}
