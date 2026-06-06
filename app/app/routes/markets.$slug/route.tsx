@@ -17,15 +17,16 @@ const MarketPage = () => {
   const ohlc = detail?.ohlc
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-surface-primary">
+    // Outer shell: very dark background so panels "float" on it
+    <div className="flex flex-col h-screen overflow-hidden" style={{ backgroundColor: '#161616' }}>
       <Navbar />
       <AlertBanner />
 
-      {/* 3-column body — flush, divided by thin borders */}
-      <div className="flex flex-1 overflow-hidden divide-x divide-border-subtle">
+      {/* Panel row — gaps expose the dark outer background */}
+      <div className="flex flex-1 overflow-hidden gap-1.5 p-1.5 pt-1.5 min-h-0">
 
-        {/* LEFT: header + chart + bottom tabs */}
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* LEFT panel: rounded card */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-[10px] bg-surface-primary">
           <MarketHeader
             icon={market.icon}
             title={market.title}
@@ -48,13 +49,13 @@ const MarketPage = () => {
           <BottomTabs />
         </div>
 
-        {/* MIDDLE: Order Book */}
-        <div className="w-[280px] shrink-0 overflow-hidden">
+        {/* MIDDLE panel: Order Book */}
+        <div className="w-[272px] shrink-0 overflow-hidden rounded-[10px] bg-surface-primary">
           <OrderBook />
         </div>
 
-        {/* RIGHT: Trading Panel */}
-        <div className="w-[280px] shrink-0 overflow-hidden">
+        {/* RIGHT panel: Trading Panel */}
+        <div className="w-[272px] shrink-0 overflow-hidden rounded-[10px] bg-surface-primary">
           <TradingPanel />
         </div>
 

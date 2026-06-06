@@ -2,19 +2,25 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface-primary: #242424;
-  --color-surface-card: #353535;
-  --color-surface-hover: #404040;
-  --color-text-primary: #ffffff;
-  --color-text-secondary: #adadad;
-  --color-text-tertiary: #919191;
+  /* --- surfaces --- */
+  --color-surface-primary: #272727;   /* panel background */
+  --color-surface-card: #313131;      /* elevated within panel */
+  --color-surface-hover: #3a3a3a;     /* hover states */
+
+  /* --- text --- */
+  --color-text-primary: #f0f0f0;      /* slightly warmer white for more contrast */
+  --color-text-secondary: #b8b8b8;    /* up from #adadad */
+  --color-text-tertiary: #7a7a7a;
+
+  /* --- accent --- */
   --color-bearish-red: #ed6d58;
   --color-bullish-green: #71d886;
   --color-brand-violet: #9998ff;
   --color-sign-in-cta: #5a27f4;
-  --color-border-subtle: #404040;
+
+  /* --- borders --- */
+  --color-border-subtle: #383838;
   --color-border-default: #ced2ff;
-  --color-surface-secondary: #2e2e2e;
 
   --font-barlow: 'Barlow', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -41,8 +47,8 @@ body {
 }
 
 body {
-  background-color: #242424;
-  color: #ffffff;
+  background-color: #161616;
+  color: #f0f0f0;
   font-family: 'Barlow', sans-serif;
   font-size: 15px;
   line-height: 20px;

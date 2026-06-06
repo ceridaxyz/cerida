@@ -21,7 +21,7 @@ const ChevronDownIcon = () => (
 )
 
 const Navbar = () => (
-  <nav className="flex items-center h-[46px] px-4 bg-surface-primary border-b border-border-subtle shrink-0">
+  <nav className="flex items-center h-[46px] px-4 border-b border-border-subtle shrink-0" style={{ backgroundColor: '#161616' }}>
     {/* Logo */}
     <NavLink to="/" className="flex items-center justify-center w-7 h-7 rounded-[6px] bg-brand-violet mr-5 shrink-0">
       <span className="text-white font-bold text-[13px] leading-none" style={{ fontFamily: 'Barlow, sans-serif' }}>U</span>

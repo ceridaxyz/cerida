@@ -11,7 +11,7 @@ export const Layout = ({ children }: { children: ReactNode }) => (
       <Meta />
       <Links />
     </head>
-    <body className="min-h-full flex flex-col bg-surface-primary text-text-primary">
+    <body className="min-h-full flex flex-col text-text-primary" style={{ backgroundColor: '#161616' }}>
       {children}
       <ScrollRestoration />
       <Scripts />

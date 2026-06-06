@@ -7,7 +7,7 @@ const WarningIcon = () => (
 )
 
 const AlertBanner = () => (
-  <div className="flex items-center gap-2.5 px-4 py-2 text-[13px] text-text-secondary border-b border-border-subtle" style={{ backgroundColor: '#1c2a38' }}>
+  <div className="flex items-center gap-2.5 px-4 py-2 text-[13px] text-text-secondary border-b border-border-subtle" style={{ backgroundColor: '#192130' }}>
     <WarningIcon />
     <span>
       Trading paused for Polymarket V2 migration. Close any open positions by April 27th — anything left open will be auto-closed at market price.
