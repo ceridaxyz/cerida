@@ -9,3 +9,4 @@
 - multi-collateral setup
 - apy vaults
 - pro mode and advanced mode
+- socials
