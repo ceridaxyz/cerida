@@ -59,7 +59,7 @@ const OrderBook = () => {
   const bidPct = 12
 
   return (
-    <div className="flex flex-col bg-surface-card border-l border-border-subtle h-full min-w-0">
+    <div className="flex flex-col bg-surface-primary h-full min-w-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-border-subtle shrink-0">
         <span className="text-[13px] font-medium text-text-primary tracking-wide uppercase">Order Book</span>

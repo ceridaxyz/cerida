@@ -12,7 +12,7 @@ const TradingPanel = () => {
   const pctOptions = [10, 25, 50, 75]
 
   return (
-    <div className="flex flex-col bg-surface-card border-l border-border-subtle h-full min-w-0">
+    <div className="flex flex-col bg-surface-primary h-full min-w-0">
       {/* LONG / SHORT toggle */}
       <div className="flex border-b border-border-subtle shrink-0">
         <button

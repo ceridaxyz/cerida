@@ -8,9 +8,7 @@ import TradingPanel from '../../components/market/trading-panel'
 import BottomTabs from '../../components/market/bottom-tabs'
 import { MARKET_DETAIL, MARKETS } from '../../data/markets'
 
-export const meta = () => [
-  { title: 'Market — Ultramarkets' },
-]
+export const meta = () => [{ title: 'Market — Ultramarkets' }]
 
 const MarketPage = () => {
   const { slug } = useParams<{ slug: string }>()
@@ -23,43 +21,43 @@ const MarketPage = () => {
       <Navbar />
       <AlertBanner />
 
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <MarketHeader
-          icon={market.icon}
-          title={market.title}
-          price={market.price}
-          change={market.change}
-          isPositive={market.isPositive}
-          openInterest={detail?.openInterest ?? '$0'}
-          capacityLeft={detail?.capacityLeft ?? '$0'}
-          volume={market.volume}
-          liquidity={market.liquidity}
-          autoClose={market.autoClose}
-          relatedMarkets={detail?.relatedMarkets ?? []}
-        />
+      {/* 3-column body — flush, divided by thin borders */}
+      <div className="flex flex-1 overflow-hidden divide-x divide-border-subtle">
 
-        <div className="flex flex-1 overflow-hidden">
-          {/* Chart + bottom tabs */}
-          <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-            <div className="flex-1 overflow-hidden">
-              <ChartPlaceholder
-                symbol={market.slug.split('-')[0].toUpperCase()}
-                ohlc={ohlc}
-              />
-            </div>
-            <BottomTabs />
+        {/* LEFT: header + chart + bottom tabs */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <MarketHeader
+            icon={market.icon}
+            title={market.title}
+            price={market.price}
+            change={market.change}
+            isPositive={market.isPositive}
+            openInterest={detail?.openInterest ?? '$0'}
+            capacityLeft={detail?.capacityLeft ?? '$0'}
+            volume={market.volume}
+            liquidity={market.liquidity}
+            autoClose={market.autoClose}
+            relatedMarkets={detail?.relatedMarkets ?? []}
+          />
+          <div className="flex-1 overflow-hidden">
+            <ChartPlaceholder
+              symbol={market.slug.split('-')[0].toUpperCase()}
+              ohlc={ohlc}
+            />
           </div>
-
-          {/* Order Book */}
-          <div className="w-[280px] shrink-0 overflow-hidden">
-            <OrderBook />
-          </div>
-
-          {/* Trading Panel */}
-          <div className="w-[280px] shrink-0 overflow-hidden">
-            <TradingPanel />
-          </div>
+          <BottomTabs />
         </div>
+
+        {/* MIDDLE: Order Book */}
+        <div className="w-[280px] shrink-0 overflow-hidden">
+          <OrderBook />
+        </div>
+
+        {/* RIGHT: Trading Panel */}
+        <div className="w-[280px] shrink-0 overflow-hidden">
+          <TradingPanel />
+        </div>
+
       </div>
     </div>
   )
