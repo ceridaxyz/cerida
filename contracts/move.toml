@@ -4,7 +4,12 @@ edition = "2024.beta"
 version = "0.0.1"
 
 [dependencies]
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+# Sui, Bridge, MoveStdlib and SuiSystem are imported implicitly (Sui 1.45+).
+# DeepBook Predict is referenced by local path: the pushed workshop branch on
+# GitHub is out of sync with the local clone (macro vs fn skew), so the local
+# checkout is the only internally-consistent source. Switch to a git dep once
+# a coherent rev is published.
+deepbook_predict = { local = "../../../clones/deepbookv3-testnet-4-16/packages/predict" }
 
 [addresses]
 cerida = "0x0"
