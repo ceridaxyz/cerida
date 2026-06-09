@@ -1,0 +1,62 @@
+# Cerida local Predict environment — Sui localnet only.
+#
+# This runs ONLY a Sui localnet node (RPC :9000, faucet :9123). All publishing,
+# Predict setup, and Cerida flow simulation is done by host scripts (see
+# scripts/) using the host's `sui 1.73` binary + the TS SDK against this node.
+# Keeping the build toolchain on the host avoids baking it into the image.
+#
+# Usage:
+#   docker compose up -d            # start the localnet
+#   docker compose logs -f          # watch it
+#   docker compose down -v          # stop + wipe (fresh genesis next time)
+#
+# The node writes its deployer keystore to ./deployments/.sui-keystore so the
+# host scripts can import the funded genesis account.
+
+networks:
+  cerida-net:
+    driver: bridge
+
+volumes:
+  sui_data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+
+services:
+  sui-localnet:
+    # Must be a sui-tools image new enough to run predict-testnet-4-16's
+    # [environments] manifest format (>= ~1.65). Default targets 1.73.1.
+    # If the pull fails, set SUI_TOOLS_IMAGE in .env to a tag that exists for
+    # your arch (see https://hub.docker.com/r/mysten/sui-tools/tags).
+    image: ${SUI_TOOLS_IMAGE:-mysten/sui-tools:testnet-v1.73.1-arm64}
+    container_name: cerida-sui-localnet
+    environment:
+      FORCE_REGENESIS: ${FORCE_REGENESIS:-true}
+    command: >
+      sh -c '
+        rm -rf /root/.sui/sui_config;
+        export RUST_LOG="off,sui_node=info";
+        sui start --with-faucet --force-regenesis &
+        SUI_PID=$$!;
+        until [ -f /root/.sui/sui_config/sui.keystore ]; do sleep 1; done;
+        cp /root/.sui/sui_config/sui.keystore /shared/.sui-keystore;
+        chmod 644 /shared/.sui-keystore;
+        wait $$SUI_PID
+      '
+    ports:
+      - "9000:9000" # JSON-RPC
+      - "9123:9123" # faucet
+    volumes:
+      - sui_data:/root/.sui
+      - ./deployments:/shared
+    networks:
+      - cerida-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped

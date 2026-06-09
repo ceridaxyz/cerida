@@ -1,0 +1,20 @@
+{
+  "name": "cerida-local",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Publish Predict + Cerida to a local Sui network and simulate the full mint/redeem flow.",
+  "scripts": {
+    "deploy": "bun src/deploy.ts",
+    "setup": "bun src/setup.ts",
+    "flow": "bun src/flow.ts",
+    "all": "bun src/deploy.ts && bun src/setup.ts && bun src/flow.ts"
+  },
+  "dependencies": {
+    "@mysten/sui": "^1.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
