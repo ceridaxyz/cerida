@@ -13,3 +13,7 @@ deepbook_predict = { local = "../../../clones/deepbookv3-testnet-4-16/packages/p
 
 [addresses]
 cerida = "0x0"
+
+# Matches Predict's pinned localnet chain-id so per-environment published
+# addresses resolve via Move.lock when deploying to the local Docker network.
+

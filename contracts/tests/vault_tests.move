@@ -87,3 +87,106 @@ fun keeper_is_creator() {
     ts::return_shared(v);
     s.end();
 }
+
+// === Fungibility: split / merge / same_key ===
+
+#[test]
+fun split_reduces_original_and_creates_piece() {
+    let ctx = &mut tx_context::dummy();
+    let mut token = position_token::new_binary(oid(), oid(), 100, 75_000, true, 100, ctx);
+    let piece = token.split(40, ctx);
+    assert_eq!(token.qty(), 60);
+    assert_eq!(piece.qty(), 40);
+    // The split piece claims the same position, so it's fungible with the rest.
+    assert!(position_token::same_key(&token, &piece));
+    position_token::burn(token);
+    position_token::burn(piece);
+}
+
+#[test]
+fun merge_adds_quantities() {
+    let ctx = &mut tx_context::dummy();
+    let mut a = position_token::new_binary(oid(), oid(), 100, 75_000, true, 60, ctx);
+    let b = position_token::new_binary(oid(), oid(), 100, 75_000, true, 40, ctx);
+    a.merge(b);
+    assert_eq!(a.qty(), 100);
+    position_token::burn(a);
+}
+
+#[test]
+fun split_then_merge_is_identity() {
+    let ctx = &mut tx_context::dummy();
+    let mut token = position_token::new_range(oid(), oid(), 100, 74_000, 76_000, 100, ctx);
+    let piece = token.split(30, ctx);
+    token.merge(piece);
+    assert_eq!(token.qty(), 100);
+    position_token::burn(token);
+}
+
+#[test]
+fun same_key_distinguishes_positions() {
+    let ctx = &mut tx_context::dummy();
+    let a = position_token::new_binary(oid(), oid(), 100, 75_000, true, 10, ctx);
+    let up = position_token::new_binary(oid(), oid(), 100, 75_000, true, 10, ctx);
+    let down = position_token::new_binary(oid(), oid(), 100, 75_000, false, 10, ctx);
+    assert!(position_token::same_key(&a, &up));
+    assert!(!position_token::same_key(&a, &down)); // opposite side ≠ fungible
+    position_token::burn(a);
+    position_token::burn(up);
+    position_token::burn(down);
+}
+
+#[test, expected_failure]
+fun split_rejects_full_amount() {
+    let ctx = &mut tx_context::dummy();
+    let mut token = position_token::new_binary(oid(), oid(), 100, 75_000, true, 50, ctx);
+    let piece = token.split(50, ctx); // amount must be < qty
+    position_token::burn(token);
+    position_token::burn(piece);
+}
+
+#[test, expected_failure]
+fun merge_rejects_different_key() {
+    let ctx = &mut tx_context::dummy();
+    let mut a = position_token::new_binary(oid(), oid(), 100, 75_000, true, 60, ctx);
+    let b = position_token::new_binary(oid(), oid(), 100, 76_000, true, 40, ctx); // different strike
+    a.merge(b);
+    position_token::burn(a);
+}
+
+// === Partial redeem ===
+
+#[test]
+fun request_redeem_partial_returns_remainder() {
+    let mut s = ts::begin(KEEPER);
+    vault::create<QUOTE>(s.ctx());
+
+    s.next_tx(USER);
+    let mut v = s.take_shared<CeridaVault<QUOTE>>();
+    // A token claiming this vault, 100 contracts.
+    let token = position_token::new_binary(object::id(&v), oid(), 100, 75_000, true, 100, s.ctx());
+
+    // Sell only 40; the other 60 should come straight back to the holder.
+    let redeem_id = vault::request_redeem(&mut v, token, 40, s.ctx());
+    assert_eq!(redeem_id, 0);
+    ts::return_shared(v);
+
+    s.next_tx(USER);
+    let remainder = s.take_from_sender<PositionToken>();
+    assert_eq!(remainder.qty(), 60);
+    position_token::burn(remainder);
+    s.end();
+}
+
+#[test, expected_failure]
+fun request_redeem_rejects_excess_qty() {
+    let mut s = ts::begin(KEEPER);
+    vault::create<QUOTE>(s.ctx());
+
+    s.next_tx(USER);
+    let mut v = s.take_shared<CeridaVault<QUOTE>>();
+    let token = position_token::new_binary(object::id(&v), oid(), 100, 75_000, true, 100, s.ctx());
+    let _ = vault::request_redeem(&mut v, token, 101, s.ctx()); // > qty
+    ts::return_shared(v);
+    s.end();
+}

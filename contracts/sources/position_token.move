@@ -7,6 +7,12 @@
 /// claim that the vault issues on mint and burns on redeem.
 module cerida::position_token;
 
+// === Errors ===
+/// Tried to merge two tokens that claim different positions.
+const EKeyMismatch: u64 = 0;
+/// Split amount is zero or not strictly less than the token's quantity.
+const EInvalidQty: u64 = 1;
+
 /// Claim on a single Predict position (binary or vertical range).
 /// `is_range` selects which fields are meaningful:
 ///   binary → (strike, is_up);  range → (lower, higher).
@@ -43,6 +49,57 @@ public fun lower(token: &PositionToken): u64 { token.lower }
 public fun higher(token: &PositionToken): u64 { token.higher }
 
 public fun qty(token: &PositionToken): u64 { token.qty }
+
+// === Fungibility ===
+//
+// Positions are fungible by key: two tokens claiming the identical position
+// (same vault, oracle, expiry and binary/range key) are interchangeable, and a
+// single token can be split. This is pure Cerida-side accounting — Predict only
+// ever tracks the aggregate per-key quantity in the manager, so splitting or
+// merging claims here never touches the underlying position.
+
+/// True when two tokens claim the identical position key (so they're fungible).
+/// Sentinel fields (the unused half of each kind) are zeroed, so comparing all
+/// of them is correct for both binary and range tokens.
+public fun same_key(a: &PositionToken, b: &PositionToken): bool {
+    a.vault_id == b.vault_id &&
+    a.oracle_id == b.oracle_id &&
+    a.expiry == b.expiry &&
+    a.is_range == b.is_range &&
+    a.strike == b.strike &&
+    a.is_up == b.is_up &&
+    a.lower == b.lower &&
+    a.higher == b.higher
+}
+
+/// Split `amount` contracts off into a new token, reducing this one by the same.
+/// Lets a holder sell or transfer part of a position. `amount` must be in
+/// `(0, qty)` — a full split is just keeping the original token.
+public fun split(token: &mut PositionToken, amount: u64, ctx: &mut TxContext): PositionToken {
+    assert!(amount > 0 && amount < token.qty, EInvalidQty);
+    token.qty = token.qty - amount;
+    PositionToken {
+        id: object::new(ctx),
+        vault_id: token.vault_id,
+        oracle_id: token.oracle_id,
+        expiry: token.expiry,
+        is_range: token.is_range,
+        strike: token.strike,
+        is_up: token.is_up,
+        lower: token.lower,
+        higher: token.higher,
+        qty: amount,
+    }
+}
+
+/// Merge `other` into `token`; their quantities add. Both must claim the exact
+/// same position key. `other` is consumed.
+public fun merge(token: &mut PositionToken, other: PositionToken) {
+    assert!(same_key(token, &other), EKeyMismatch);
+    let PositionToken { id, qty, .. } = other;
+    token.qty = token.qty + qty;
+    id.delete();
+}
 
 // === Package Functions ===
 

@@ -36,6 +36,8 @@ const ESlippageExceeded: u64 = 3;
 const EWrongManager: u64 = 4;
 /// The token was issued by a different vault.
 const EWrongVault: u64 = 5;
+/// Redeem quantity is zero or exceeds the token's quantity.
+const EInvalidRedeemQty: u64 = 6;
 
 // === Events ===
 
@@ -263,15 +265,29 @@ public fun execute_mint<Quote>(
 }
 
 /// Escrow a PositionToken for redemption. The keeper settles it via
-/// `execute_redeem`. Returns the redeem id.
+/// `execute_redeem`. `qty` allows a partial sale: only `qty` contracts are
+/// escrowed for redemption and the unsold remainder is returned to the holder
+/// immediately. Pass the full token quantity to redeem the whole position.
+/// Returns the redeem id.
+#[allow(lint(self_transfer))]
 public fun request_redeem<Quote>(
     vault: &mut CeridaVault<Quote>,
     token: PositionToken,
-    ctx: &TxContext,
+    qty: u64,
+    ctx: &mut TxContext,
 ): u64 {
     assert!(token.vault_id() == object::id(vault), EWrongVault);
+    let full = token.qty();
+    assert!(qty > 0 && qty <= full, EInvalidRedeemQty);
+
+    // Keep the unsold remainder with the holder; escrow only `qty` for redeem.
+    let mut token = token;
+    if (qty < full) {
+        let remainder = position_token::split(&mut token, full - qty, ctx);
+        transfer::public_transfer(remainder, ctx.sender());
+    };
+
     let user = ctx.sender();
-    let qty = token.qty();
     let redeem_id = vault.next_redeem_id;
     vault.next_redeem_id = redeem_id + 1;
     vault.redeems.add(redeem_id, RedeemTicket { user, token });
