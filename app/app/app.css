@@ -1,42 +1,110 @@
-@import url("https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 
 @theme {
   /* --- surfaces --- */
-  --color-surface-primary: #272727;   /* panel background */
-  --color-surface-card: #313131;      /* elevated within panel */
-  --color-surface-hover: #3a3a3a;     /* hover states */
+  --color-surface-primary: #131211;
+  --color-surface-card: #1e1c1a;
+  --color-surface-hover: #272422;
 
   /* --- text --- */
-  --color-text-primary: #f0f0f0;      /* slightly warmer white for more contrast */
-  --color-text-secondary: #b8b8b8;    /* up from #adadad */
-  --color-text-tertiary: #7a7a7a;
+  --color-text-primary: #f7f8f8;
+  --color-text-secondary: #d0d6e0;
+  --color-text-tertiary: #8a8f98;
+  --color-text-quaternary: #62666d;
 
-  /* --- accent --- */
-  --color-bearish-red: #ed6d58;
-  --color-bullish-green: #71d886;
-  --color-brand-violet: #9998ff;
-  --color-sign-in-cta: #5a27f4;
+  /* --- trading --- */
+  --color-bearish-red: #eb5757;
+  --color-bullish-green: #27a644;
+
+  /* --- brand / cta --- */
+  --color-brand-violet: #5e6ad2;
+  --color-sign-in-cta: #5e6ad2;
+
+  /* --- state --- */
+  --color-warning: #ffdf9f;
+  --color-info: #8fa6ff;
 
   /* --- borders --- */
-  --color-border-subtle: #383838;
-  --color-border-default: #ced2ff;
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-default: rgba(255, 255, 255, 0.22);
 
-  --font-barlow: 'Barlow', sans-serif;
+  /* --- focus --- */
+  --color-focus-ring: #ff2d6f;
+
+  /* --- fonts --- */
+  --font-display: 'Inter', Helvetica, Arial, sans-serif;
+  --font-barlow: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
+  /* --- radii (Linear scale) --- */
   --radius-sm: 2px;
-  --radius-badge: 3px;
-  --radius-input: 5px;
+  --radius-badge: 4px;
+  --radius-input: 6px;
   --radius-button: 6px;
   --radius-default: 8px;
   --radius-card: 12px;
+  --radius-pill: 9999px;
 }
 
 *,
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+/* Remove default browser outline, replace with pink ring on keyboard focus */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid #ff2d6f;
+  outline-offset: 2px;
+}
+
+/* Main trading page panels highlight pink when anything inside is focused */
+.panel-widget:focus-within {
+  border-color: #ff2d6f;
+  border-width: 2.2px;
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #1e1c1a 25%,
+    #272422 50%,
+    #1e1c1a 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+/* Resize handle — visible on dark background */
+.react-grid-item > .react-resizable-handle {
+  z-index: 10;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-right-color: rgba(255, 255, 255, 0.5);
+  border-bottom-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Dragged widget always floats above everything */
+.react-grid-item.react-draggable-dragging {
+  z-index: 100 !important;
+}
+
+/* Drop placeholder */
+.react-grid-item.react-grid-placeholder {
+  background: rgba(94, 106, 210, 0.15) !important;
+  border: 1px solid rgba(94, 106, 210, 0.4);
+  border-radius: 18px;
+  opacity: 1 !important;
 }
 
 html,
@@ -47,11 +115,12 @@ body {
 }
 
 body {
-  background-color: #161616;
-  color: #f0f0f0;
-  font-family: 'Barlow', sans-serif;
-  font-size: 15px;
-  line-height: 20px;
+  background-color: #08090a;
+  color: #f7f8f8;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 19.5px;
+  letter-spacing: -0.13px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

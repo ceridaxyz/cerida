@@ -57,7 +57,7 @@ const MarketHeader = ({
   return (
     <div className="border-b border-border-subtle bg-surface-primary shrink-0">
       {/* Title row */}
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex items-center gap-2 px-4 py-3">
         {icon && (
           <div className="w-7 h-7 rounded-[6px] bg-surface-card border border-border-subtle flex items-center justify-center shrink-0 text-sm">
             {icon}
@@ -79,7 +79,7 @@ const MarketHeader = ({
       </div>
 
       {/* Stats row */}
-      <div className="flex items-start gap-5 px-3 pb-2 overflow-x-auto">
+      <div className="flex items-start gap-6 px-4 pb-3 overflow-x-auto">
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Price</p>
           <p className="text-[14px] font-medium text-text-primary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{price}</p>
@@ -112,7 +112,7 @@ const MarketHeader = ({
 
       {/* Related markets */}
       {relatedMarkets.length > 0 && (
-        <div className="flex items-center gap-1.5 px-3 pb-2 overflow-x-auto">
+        <div className="flex items-center gap-1.5 px-4 pb-3 overflow-x-auto">
           {relatedMarkets.map((m) => (
             <Link
               key={m.name}

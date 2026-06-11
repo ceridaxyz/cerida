@@ -16,11 +16,12 @@ export interface Market {
 const MarketCard = ({ market }: { market: Market }) => {
   return (
     <Link
-      to={`/markets/${market.slug}`}
-      className="block bg-surface-card border border-border-subtle rounded-[12px] p-4 hover:bg-surface-hover transition-colors cursor-pointer"
+      to="/trade"
+      className="block bg-surface-card border border-border-default rounded-[12px] p-4 hover:bg-surface-hover transition-colors cursor-pointer"
+      style={{ boxShadow: '0 1px 0 0 rgba(255,255,255,0.1) inset, 0 8px 32px rgba(0,0,0,0.6)' }}
     >
       <div className="flex items-start gap-3 mb-3">
-        <div className="w-9 h-9 rounded-[8px] bg-surface-hover border border-border-subtle flex items-center justify-center shrink-0 text-lg overflow-hidden">
+        <div className="w-9 h-9 rounded-[8px] bg-surface-primary border border-border-default flex items-center justify-center shrink-0 text-lg overflow-hidden">
           {market.icon}
         </div>
         <p className="text-[15px] font-medium text-text-primary leading-snug flex-1 min-w-0 line-clamp-2">

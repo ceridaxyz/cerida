@@ -1,10 +1,40 @@
-import { lazy, Suspense, useState } from 'react';
-import ReactGridLayout, { WidthProvider } from 'react-grid-layout/legacy';
+import { lazy, Suspense, useState, useRef, useEffect } from 'react';
+import ReactGridLayout, { type Layout } from 'react-grid-layout/legacy';
 import 'react-grid-layout/css/styles.css';
-import 'react-resizable/css/styles.css';
 import Sidebar from '../../components/sidebar';
 
-const RGL = WidthProvider(ReactGridLayout);
+export const meta = () => [{ title: 'Trade — Cerida' }];
+
+// ── Viewport-aware grid sizing ─────────────────────────────────────────────────
+// TOTAL_ROWS rows always fill the full viewport height.
+
+const COLS       = 12;
+const TOTAL_ROWS = 12;
+const GAP        = 8;
+const PAD        = 8;
+
+function useGridSize() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 1200, rowHeight: 60 });
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const update = (w: number, h: number) => {
+      const rowHeight = Math.floor((h - PAD * 2 - GAP * (TOTAL_ROWS - 1)) / TOTAL_ROWS);
+      setSize({ width: w, rowHeight: Math.max(rowHeight, 20) });
+    };
+    const ro = new ResizeObserver(([e]) => {
+      if (e) update(e.contentRect.width, e.contentRect.height);
+    });
+    ro.observe(ref.current);
+    update(ref.current.clientWidth, ref.current.clientHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  return { ref, ...size };
+}
+
+// ── Lazy widgets ───────────────────────────────────────────────────────────────
 
 const OrderBook     = lazy(() => import('../../components/market/order-book'));
 const BottomTabs    = lazy(() => import('../../components/market/bottom-tabs'));
@@ -12,15 +42,12 @@ const BinaryTrading = lazy(() => import('../../components/trading/binary-trading
 const RangeTrading  = lazy(() => import('../../components/trading/range-trading'));
 const TradingPanel  = lazy(() => import('../../components/market/trading-panel'));
 
-export const meta = () => [{ title: 'Trade — Cerida' }];
-
 // ── Skeletons ──────────────────────────────────────────────────────────────────
 
 const TradeSkeleton = () => (
   <div className="flex flex-col h-full p-3 gap-3">
     <div className="skeleton h-8 rounded-[8px]" />
     <div className="skeleton h-5 w-2/3 rounded-[6px]" />
-    <div className="skeleton h-9 rounded-[8px]" />
     <div className="skeleton h-9 rounded-[8px]" />
     <div className="mt-auto skeleton h-9 rounded-[8px]" />
   </div>
@@ -30,7 +57,7 @@ const OrderBookSkeleton = () => (
   <div className="flex flex-col h-full p-3 gap-2">
     <div className="skeleton h-5 w-1/3 rounded-[6px]" />
     {Array.from({ length: 8 }).map((_, i) => (
-      <div key={i} className="skeleton h-4 rounded-[4px]" style={{ opacity: 1 - i * 0.09 }} />
+      <div key={i} className="skeleton h-4 rounded-badge" style={{ opacity: 1 - i * 0.09 }} />
     ))}
   </div>
 );
@@ -38,7 +65,7 @@ const OrderBookSkeleton = () => (
 const BottomTabsSkeleton = () => (
   <div className="flex flex-col h-full p-3 gap-3">
     <div className="flex gap-2">
-      {[1,2,3].map(i => <div key={i} className="skeleton h-6 w-16 rounded-[6px]" />)}
+      {[1, 2, 3].map(i => <div key={i} className="skeleton h-6 w-16 rounded-[6px]" />)}
     </div>
     <div className="skeleton flex-1 rounded-[8px]" />
   </div>
@@ -49,98 +76,65 @@ const BottomTabsSkeleton = () => (
 function Widget({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="panel-widget rounded-[18px] overflow-hidden bg-surface-primary border border-border-subtle h-full flex flex-col">
-      {/* Drag handle */}
-      <div className="widget-handle flex items-center justify-between px-3 h-8 shrink-0 border-b border-border-subtle cursor-grab select-none">
-        <span className="text-[11px] font-medium text-text-quaternary uppercase tracking-widest">
-          {title}
-        </span>
-        <div className="flex gap-[3px] items-center opacity-30">
+      <div className="widget-handle flex items-center justify-between px-3 h-9 shrink-0 border-b border-border-subtle cursor-grab active:cursor-grabbing select-none">
+        <span className="text-[11px] font-medium text-text-quaternary uppercase tracking-widest">{title}</span>
+        <div className="flex gap-0.75 items-center opacity-30">
           {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="w-[3px] h-[3px] rounded-full bg-text-tertiary" />
+            <div key={i} className="w-0.75 h-0.75 rounded-full bg-text-tertiary" />
           ))}
         </div>
       </div>
-      <div className="flex-1 overflow-auto min-h-0">
+      <div className="flex-1 overflow-hidden min-h-0">
         {children}
       </div>
     </div>
   );
 }
 
-// ── Layout ─────────────────────────────────────────────────────────────────────
+// ── Initial layout — 12×12 grid, fills viewport ────────────────────────────────
 
-const INITIAL_LAYOUT = [
-  { i: 'chart',    x: 0, y: 0,  w: 5, h: 9,  minW: 3, minH: 5 },
-  { i: 'book',     x: 5, y: 0,  w: 2, h: 9,  minW: 2, minH: 4 },
-  { i: 'binary',   x: 7, y: 0,  w: 3, h: 11, minW: 2, minH: 6 },
-  { i: 'range',    x: 7, y: 11, w: 3, h: 11, minW: 2, minH: 6 },
-  { i: 'positions',x: 0, y: 9,  w: 5, h: 6,  minW: 3, minH: 3 },
-  { i: 'legacy',   x: 5, y: 9,  w: 2, h: 13, minW: 2, minH: 6 },
+const INITIAL_LAYOUT: Layout = [
+  { i: 'chart',     x: 0, y: 0,  w: 6, h: 8,  minW: 2, minH: 3 },
+  { i: 'book',      x: 6, y: 0,  w: 3, h: 6,  minW: 2, minH: 3 },
+  { i: 'binary',    x: 9, y: 0,  w: 3, h: 6,  minW: 2, minH: 4 },
+  { i: 'positions', x: 0, y: 8,  w: 6, h: 4,  minW: 2, minH: 2 },
+  { i: 'legacy',    x: 6, y: 6,  w: 3, h: 6,  minW: 2, minH: 4 },
+  { i: 'range',     x: 9, y: 6,  w: 3, h: 6,  minW: 2, minH: 4 },
 ];
 
+// ── Page ───────────────────────────────────────────────────────────────────────
+
 const TradePage = () => {
-  const [layout, setLayout] = useState(INITIAL_LAYOUT);
+  const [layout, setLayout] = useState<Layout>(INITIAL_LAYOUT);
+  const { ref, width, rowHeight } = useGridSize();
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#08090a]">
       <Sidebar />
-
-      <div className="flex-1 overflow-auto">
-        <RGL
+      <div ref={ref} className="flex-1 overflow-auto">
+        <ReactGridLayout
           layout={layout}
-          onLayoutChange={(l) => setLayout([...l])}
-          cols={12}
-          rowHeight={42}
-          margin={[8, 8]}
-          containerPadding={[12, 12]}
+          onLayoutChange={(l: Layout) => setLayout([...l])}
+          cols={COLS}
+          rowHeight={rowHeight}
+          width={width}
+          margin={[GAP, GAP]}
+          containerPadding={[PAD, PAD]}
           draggableHandle=".widget-handle"
+          draggableCancel="input,button,select,textarea,a"
           resizeHandles={['se']}
-          className="min-h-full"
+          compactType="vertical"
+          preventCollision={false}
+          allowOverlap={false}
+          useCSSTransforms
         >
-          <div key="chart">
-            <Widget title="Chart" />
-          </div>
-
-          <div key="book">
-            <Widget title="Order Book">
-              <Suspense fallback={<OrderBookSkeleton />}>
-                <OrderBook />
-              </Suspense>
-            </Widget>
-          </div>
-
-          <div key="binary">
-            <Widget title="Continuous Trade">
-              <Suspense fallback={<TradeSkeleton />}>
-                <BinaryTrading />
-              </Suspense>
-            </Widget>
-          </div>
-
-          <div key="range">
-            <Widget title="Range Trade">
-              <Suspense fallback={<TradeSkeleton />}>
-                <RangeTrading />
-              </Suspense>
-            </Widget>
-          </div>
-
-          <div key="positions">
-            <Widget title="Positions">
-              <Suspense fallback={<BottomTabsSkeleton />}>
-                <BottomTabs />
-              </Suspense>
-            </Widget>
-          </div>
-
-          <div key="legacy">
-            <Widget title="Trade">
-              <Suspense fallback={<TradeSkeleton />}>
-                <TradingPanel />
-              </Suspense>
-            </Widget>
-          </div>
-        </RGL>
+          <div key="chart"     className="h-full"><Widget title="Chart" /></div>
+          <div key="book"      className="h-full"><Widget title="Order Book"><Suspense fallback={<OrderBookSkeleton />}><OrderBook /></Suspense></Widget></div>
+          <div key="binary"    className="h-full"><Widget title="Continuous Trade"><Suspense fallback={<TradeSkeleton />}><BinaryTrading /></Suspense></Widget></div>
+          <div key="positions" className="h-full"><Widget title="Positions"><Suspense fallback={<BottomTabsSkeleton />}><BottomTabs /></Suspense></Widget></div>
+          <div key="legacy"    className="h-full"><Widget title="Trade"><Suspense fallback={<TradeSkeleton />}><TradingPanel /></Suspense></Widget></div>
+          <div key="range"     className="h-full"><Widget title="Range Trade"><Suspense fallback={<TradeSkeleton />}><RangeTrading /></Suspense></Widget></div>
+        </ReactGridLayout>
       </div>
     </div>
   );

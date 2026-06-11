@@ -24,7 +24,7 @@ const BottomTabs = () => {
     <div className="flex flex-col border-t border-border-subtle bg-surface-primary shrink-0 rounded-b-[10px]" style={{ minHeight: '120px' }}>
       {/* Tab bar */}
       <div className="flex items-center border-b border-border-subtle">
-        <div className="flex items-center flex-1 overflow-x-auto">
+        <div className="flex items-center flex-1 overflow-hidden">
           {TABS.map((tab) => (
             <button
               key={tab.id}
