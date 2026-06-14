@@ -7,6 +7,7 @@ import GridChart from '../../components/grid/grid-chart';
 import BandPanel from '../../components/grid/band-panel';
 import OrderSummary from '../../components/grid/order-summary';
 import PayoffPanel from '../../components/grid/payoff-panel';
+import AnalyticsPanel from '../../components/grid/analytics-panel';
 
 export const meta = () => [{ title: 'Grid — Cerida' }];
 
@@ -61,6 +62,41 @@ function Widget({ title, children }: { title: string; children?: React.ReactNode
   );
 }
 
+// ── Tabbed widget shell ────────────────────────────────────────────────────────
+// Tabs live in the drag handle, matching the trade-panel pattern.
+
+function TabbedWidget({
+  tabs,
+}: {
+  tabs: { id: string; label: string; render: () => React.ReactNode }[];
+}) {
+  const [active, setActive] = useState(tabs[0]!.id);
+  const current = tabs.find((t) => t.id === active) ?? tabs[0]!;
+  return (
+    <div className="panel-widget rounded-[14px] overflow-hidden bg-surface-primary border border-border-subtle h-full flex flex-col">
+      <div className="widget-handle flex items-center gap-1 px-2 h-9 shrink-0 border-b border-border-subtle cursor-grab active:cursor-grabbing select-none">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActive(t.id)}
+            className="px-2.5 py-1 rounded-[6px] text-[11px] font-medium uppercase tracking-widest transition-colors"
+            style={{
+              background: active === t.id ? 'var(--color-surface-card)' : 'transparent',
+              color:
+                active === t.id
+                  ? 'var(--color-text-primary)'
+                  : 'var(--color-text-quaternary)',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 overflow-hidden min-h-0">{current.render()}</div>
+    </div>
+  );
+}
+
 // ── Layout ───────────────────────────────────────────────────────────────────
 // Left column: big (top) + rectangular (bottom). Right column: two stacked panels.
 
@@ -103,7 +139,14 @@ const GridPage = () => {
             useCSSTransforms
           >
             <div key="big" className="h-full"><Widget title="Grid"><GridChart s={s} /></Widget></div>
-            <div key="rect" className="h-full"><Widget title="Payoff"><PayoffPanel s={s} /></Widget></div>
+            <div key="rect" className="h-full">
+              <TabbedWidget
+                tabs={[
+                  { id: 'payoff', label: 'Payoff', render: () => <PayoffPanel s={s} /> },
+                  { id: 'analytics', label: 'Analytics', render: () => <AnalyticsPanel s={s} /> },
+                ]}
+              />
+            </div>
             <div key="panel-top" className="h-full"><Widget title="Bands"><BandPanel s={s} /></Widget></div>
             <div key="panel-bottom" className="h-full"><Widget title="Order"><OrderSummary s={s} /></Widget></div>
           </ReactGridLayout>

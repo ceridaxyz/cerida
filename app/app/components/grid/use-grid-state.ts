@@ -20,6 +20,12 @@ function gaussianProb(mid: number, price: number, sigma: number): number {
   return Math.max(0.01, Math.min(0.92, p));
 }
 
+// Diffusion sigma (in price units) as a function of horizon — drives both the
+// per-band probabilities and the expected-move cone. Grows ~√t.
+export function sigmaForHorizon(epochsAhead: number): number {
+  return 3 + 2.2 * Math.sqrt(Math.max(0, epochsAhead));
+}
+
 // Deterministic, stable settlement price for a past epoch (no flicker).
 function settlementPrice(epochStart: number): number {
   const seed = Math.sin(epochStart * 0.0013) * 43758.5453;
@@ -120,7 +126,7 @@ export function useGridState(): GridState {
         if (prev.has(key)) return prev;
         const mid = (band.lower + band.upper) / 2;
         const epochsAhead = Math.max(1, (epoch.end - Date.now()) / EPOCH_MS);
-        const sigma = 3 + 2.2 * Math.sqrt(epochsAhead);
+        const sigma = sigmaForHorizon(epochsAhead);
         const prob = gaussianProb(mid, price, sigma);
         const multiplier = (1 - EDGE) / prob;
         const cost = Math.round((UNIT_PAYOUT / multiplier) * 100) / 100;
