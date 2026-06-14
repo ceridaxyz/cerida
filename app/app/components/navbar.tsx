@@ -24,7 +24,7 @@ const Navbar = () => (
   <nav className="flex items-center h-[46px] px-4 border-b border-border-subtle shrink-0" style={{ backgroundColor: '#161616' }}>
     {/* Logo */}
     <NavLink to="/" className="flex items-center justify-center w-7 h-7 rounded-[6px] bg-brand-violet mr-5 shrink-0">
-      <span className="text-white font-bold text-[13px] leading-none" style={{ fontFamily: 'Barlow, sans-serif' }}>U</span>
+      <span className="text-white font-bold text-[13px] leading-none" style={{ fontFamily: 'var(--font-mono)' }}>U</span>
     </NavLink>
 
     {/* Nav links */}
@@ -80,7 +80,7 @@ const Navbar = () => (
           <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
           <path d="M12 6v12M8 10l4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
-        <span className="text-text-primary text-[15px] font-medium" style={{ fontFamily: 'JetBrains Mono, monospace' }}>$0</span>
+        <span className="text-text-primary text-[15px] font-medium" style={{ fontFamily: 'var(--font-mono)' }}>$0</span>
         <ChevronDownIcon />
       </div>
 

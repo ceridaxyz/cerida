@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion'
+import { IconChevronDown } from '@tabler/icons-react'
+import RangeTrading from '../trading/range-trading'
 
 const MIN_LEV = 2, MAX_LEV = 50, STEPS = MAX_LEV - MIN_LEV
 const LABEL_MARKS = [2, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
@@ -285,9 +287,7 @@ const TradingPanel = () => {
         ))}
         <div className="ml-auto flex items-center gap-1 text-[14px] text-text-tertiary cursor-pointer hover:text-text-secondary">
           Pro
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+          <IconChevronDown size={12} stroke={2.5} />
         </div>
       </div>
 
@@ -296,7 +296,7 @@ const TradingPanel = () => {
         <div className="flex items-center justify-between">
           <span className="text-[14px] text-text-secondary">Margin</span>
           <span className="text-[13px] text-text-tertiary">
-            Bal. <span className="text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>$8</span>
+            Bal. <span className="text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>$8</span>
           </span>
         </div>
 
@@ -355,6 +355,12 @@ const TradingPanel = () => {
               }`}
             />
           </button>
+        </div>
+
+        {/* Range section */}
+        <div className="border-t border-border-subtle pt-2 -mx-3">
+          <p className="px-3 pb-1 text-[11px] font-medium text-text-tertiary uppercase tracking-widest">Range</p>
+          <RangeTrading />
         </div>
       </div>
 

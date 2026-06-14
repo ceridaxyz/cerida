@@ -31,10 +31,10 @@ const MarketCard = ({ market }: { market: Market }) => {
 
       {/* Price + change */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[18px] font-medium text-text-primary" style={{ fontFamily: 'JetBrains Mono, monospace', letterSpacing: '-0.3px' }}>
+        <span className="text-[18px] font-medium text-text-primary" style={{ fontFamily: 'var(--font-mono)', letterSpacing: '-0.3px' }}>
           {market.price}
         </span>
-        <span className={`text-[13px] font-medium ${market.isPositive ? 'text-bullish-green' : 'text-bearish-red'}`} style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+        <span className={`text-[13px] font-medium ${market.isPositive ? 'text-bullish-green' : 'text-bearish-red'}`} style={{ fontFamily: 'var(--font-mono)' }}>
           {market.change}
         </span>
       </div>
@@ -52,15 +52,15 @@ const MarketCard = ({ market }: { market: Market }) => {
       <div className="flex items-center gap-4">
         <div>
           <p className="text-[11px] text-text-tertiary mb-0.5">Volume</p>
-          <p className="text-[13px] text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{market.volume}</p>
+          <p className="text-[13px] text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{market.volume}</p>
         </div>
         <div>
           <p className="text-[11px] text-text-tertiary mb-0.5">Liquidity</p>
-          <p className="text-[13px] text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{market.liquidity}</p>
+          <p className="text-[13px] text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{market.liquidity}</p>
         </div>
         <div className="ml-auto">
           <p className="text-[11px] text-text-tertiary mb-0.5">Auto-close</p>
-          <p className="text-[13px] text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{market.autoClose}</p>
+          <p className="text-[13px] text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{market.autoClose}</p>
         </div>
       </div>
     </Link>

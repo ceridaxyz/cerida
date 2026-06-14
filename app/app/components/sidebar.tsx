@@ -1,55 +1,29 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router'
+import {
+  IconHome,
+  IconActivity,
+  IconLayoutGrid,
+  IconBriefcase,
+  IconStar,
+  IconFileText,
+  IconUser,
+  IconChevronLeft,
+  IconChevronRight,
+} from '@tabler/icons-react'
 
-const HomeIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    <polyline points="9 22 9 12 15 12 15 22" />
-  </svg>
-)
+const HomeIcon = () => <IconHome size={18} stroke={1.75} />
+const MarketsIcon = () => <IconActivity size={18} stroke={1.75} />
+const GridIcon = () => <IconLayoutGrid size={18} stroke={1.75} />
+const PortfolioIcon = () => <IconBriefcase size={18} stroke={1.75} />
+const PointsIcon = () => <IconStar size={18} stroke={1.75} />
+const DocsIcon = () => <IconFileText size={18} stroke={1.75} />
+const UserIcon = () => <IconUser size={16} stroke={2} />
 
-const MarketsIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-  </svg>
-)
-
-const PortfolioIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="2" y="7" width="20" height="14" rx="2" />
-    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-  </svg>
-)
-
-const PointsIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-  </svg>
-)
-
-const DocsIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="16" y1="13" x2="8" y2="13" />
-    <line x1="16" y1="17" x2="8" y2="17" />
-  </svg>
-)
-
-const UserIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-    <circle cx="12" cy="7" r="4" />
-  </svg>
-)
-
-const CollapseIcon = ({ collapsed }: { collapsed: boolean }) => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {collapsed
-      ? <><polyline points="9 18 15 12 9 6" /></>
-      : <><polyline points="15 18 9 12 15 6" /></>}
-  </svg>
-)
+const CollapseIcon = ({ collapsed }: { collapsed: boolean }) =>
+  collapsed
+    ? <IconChevronRight size={16} stroke={2} />
+    : <IconChevronLeft size={16} stroke={2} />
 
 const Divider = () => <div className="h-px bg-border-subtle my-1.5 mx-3" />
 
@@ -93,7 +67,7 @@ const Sidebar = () => {
   return (
     <div
       className={`flex flex-col h-screen border-r border-border-subtle shrink-0 overflow-hidden transition-[width] duration-200 ease-in-out ${collapsed ? 'w-14' : 'w-50'}`}
-      style={{ backgroundColor: '#161616' }}
+      style={{ backgroundColor: 'var(--color-surface-primary)' }}
     >
       {/* Logo */}
       <div className={`flex items-center h-11.5 border-b border-border-subtle shrink-0 ${collapsed ? 'justify-center' : 'px-4'}`}>
@@ -107,10 +81,11 @@ const Sidebar = () => {
         </NavLink>
       </div>
 
-      {/* Nav items */}
-      <nav className="flex-1 py-3 overflow-y-auto">
+      {/* Nav items — top section */}
+      <nav className="py-3 overflow-y-auto border-b border-border-subtle shrink-0">
         <NavItem to="/" icon={<HomeIcon />} label="Home" collapsed={collapsed} />
         <NavItem to="/trade" icon={<MarketsIcon />} label="Markets" collapsed={collapsed} />
+        <NavItem to="/trade/grid" icon={<GridIcon />} label="Grid" collapsed={collapsed} />
 
         <Divider />
 
@@ -121,6 +96,9 @@ const Sidebar = () => {
 
         <NavItem to="/docs" icon={<DocsIcon />} label="Docs" collapsed={collapsed} />
       </nav>
+
+      {/* Lower section — empty for now */}
+      <div className="flex-1" />
 
       {/* Bottom: sign in + collapse */}
       <div className="border-t border-border-subtle shrink-0 p-2 flex flex-col gap-1">

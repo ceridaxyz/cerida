@@ -1,49 +1,77 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('/fonts/TX-02-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('/fonts/TX-02-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('/fonts/TX-02-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  /* --- surfaces --- */
-  --color-surface-primary: #131211;
-  --color-surface-card: #1e1c1a;
-  --color-surface-hover: #272422;
+  /* --- surfaces (Kairos) --- */
+  /* Page is pushed to pure black so the panels (kept at Kairos surface) lift off it. */
+  --color-page: #000000;
+  --color-surface-primary: #0a0a12;
+  --color-surface-card: #0d0f1a;
+  --color-surface-hover: #15172a;
 
   /* --- text --- */
-  --color-text-primary: #f7f8f8;
-  --color-text-secondary: #d0d6e0;
-  --color-text-tertiary: #8a8f98;
-  --color-text-quaternary: #62666d;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #e5e7eb;
+  --color-text-tertiary: #9ca3af;
+  --color-text-quaternary: #6b7280;
 
   /* --- trading --- */
-  --color-bearish-red: #eb5757;
-  --color-bullish-green: #27a644;
+  --color-bearish-red: #f23546;
+  --color-bullish-green: #0b9981;
 
   /* --- brand / cta --- */
-  --color-brand-violet: #5e6ad2;
-  --color-sign-in-cta: #5e6ad2;
+  --color-brand-violet: #807dfe;
+  --color-accent-light: #a5a3ff;
+  --color-sign-in-cta: #807dfe;
 
   /* --- state --- */
   --color-warning: #ffdf9f;
-  --color-info: #8fa6ff;
+  --color-info: #a5a3ff;
 
   /* --- borders --- */
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-default: rgba(255, 255, 255, 0.22);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-default: #1a1b2e;
 
   /* --- focus --- */
-  --color-focus-ring: #ff2d6f;
+  --color-focus-ring: #807dfe;
 
   /* --- fonts --- */
-  --font-display: 'Inter', Helvetica, Arial, sans-serif;
-  --font-barlow: 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: 'Berkeley Mono', ui-monospace, monospace;
+  --font-display: 'Berkeley Mono', ui-monospace, monospace;
+  --font-barlow: 'Berkeley Mono', ui-monospace, monospace;
+  --font-mono: 'Berkeley Mono', ui-monospace, monospace;
 
-  /* --- radii (Linear scale) --- */
-  --radius-sm: 2px;
+  /* --- radii (Kairos scale) --- */
+  --radius-sm: 4px;
   --radius-badge: 4px;
   --radius-input: 6px;
   --radius-button: 6px;
   --radius-default: 8px;
-  --radius-card: 12px;
+  --radius-card: 10px;
   --radius-pill: 9999px;
 }
 
@@ -53,20 +81,20 @@
   box-sizing: border-box;
 }
 
-/* Remove default browser outline, replace with pink ring on keyboard focus */
+/* Remove default browser outline, replace with accent ring on keyboard focus */
 :focus {
   outline: none;
 }
 
 :focus-visible {
-  outline: 2px solid #ff2d6f;
+  outline: 2px solid #807dfe;
   outline-offset: 2px;
 }
 
-/* Main trading page panels highlight pink when anything inside is focused */
+/* Main trading page panels highlight with accent when anything inside is focused */
 .panel-widget:focus-within {
-  border-color: #ff2d6f;
-  border-width: 2.2px;
+  border-color: #807dfe;
+  border-width: 1.5px;
 }
 
 @keyframes shimmer {
@@ -77,21 +105,81 @@
 .skeleton {
   background: linear-gradient(
     90deg,
-    #1e1c1a 25%,
-    #272422 50%,
-    #1e1c1a 75%
+    #0d0f1a 25%,
+    #15172a 50%,
+    #0d0f1a 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.6s ease-in-out infinite;
 }
 
-/* Resize handle — visible on dark background */
+/* Resize handles — grabbable strips on every edge + corner */
 .react-grid-item > .react-resizable-handle {
-  z-index: 10;
+  z-index: 30;
+  opacity: 1;
+  background: none;
+  padding: 0;
 }
+/* Hide RGL's default corner glyph; we draw our own */
 .react-grid-item > .react-resizable-handle::after {
-  border-right-color: rgba(255, 255, 255, 0.5);
-  border-bottom-color: rgba(255, 255, 255, 0.5);
+  display: none;
+}
+
+/* Edge strips — single-axis resize */
+.react-grid-item > .react-resizable-handle-e,
+.react-grid-item > .react-resizable-handle-w {
+  top: 0;
+  height: 100%;
+  width: 10px;
+  margin: 0;
+  transform: none;
+  cursor: ew-resize;
+}
+.react-grid-item > .react-resizable-handle-e { right: -2px; }
+.react-grid-item > .react-resizable-handle-w { left: -2px; }
+
+.react-grid-item > .react-resizable-handle-n,
+.react-grid-item > .react-resizable-handle-s {
+  left: 0;
+  width: 100%;
+  height: 10px;
+  margin: 0;
+  transform: none;
+  cursor: ns-resize;
+}
+.react-grid-item > .react-resizable-handle-n { top: -2px; }
+.react-grid-item > .react-resizable-handle-s { bottom: -2px; }
+
+/* Corners — both axes */
+.react-grid-item > .react-resizable-handle-se,
+.react-grid-item > .react-resizable-handle-sw,
+.react-grid-item > .react-resizable-handle-ne,
+.react-grid-item > .react-resizable-handle-nw {
+  width: 16px;
+  height: 16px;
+  transform: none;
+  z-index: 31;
+}
+.react-grid-item > .react-resizable-handle-se { bottom: 0; right: 0; cursor: se-resize; }
+.react-grid-item > .react-resizable-handle-sw { bottom: 0; left: 0; cursor: sw-resize; }
+.react-grid-item > .react-resizable-handle-ne { top: 0; right: 0; cursor: ne-resize; }
+.react-grid-item > .react-resizable-handle-nw { top: 0; left: 0; cursor: nw-resize; }
+
+/* Visible grip in the bottom-right corner */
+.react-grid-item > .react-resizable-handle-se::before {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid rgba(255, 255, 255, 0.35);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.35);
+  transition: border-color 0.15s;
+}
+.react-grid-item:hover > .react-resizable-handle-se::before {
+  border-right-color: rgba(255, 255, 255, 0.8);
+  border-bottom-color: rgba(255, 255, 255, 0.8);
 }
 
 /* Dragged widget always floats above everything */
@@ -115,12 +203,12 @@ body {
 }
 
 body {
-  background-color: #08090a;
-  color: #f7f8f8;
-  font-family: 'Inter', system-ui, sans-serif;
+  background-color: #000000;
+  color: #ffffff;
+  font-family: 'Berkeley Mono', ui-monospace, monospace;
   font-size: 13px;
-  line-height: 19.5px;
-  letter-spacing: -0.13px;
+  line-height: 1.45;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

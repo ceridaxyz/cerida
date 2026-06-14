@@ -82,31 +82,31 @@ const MarketHeader = ({
       <div className="flex items-start gap-6 px-4 pb-3 overflow-x-auto">
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Price</p>
-          <p className="text-[14px] font-medium text-text-primary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{price}</p>
+          <p className="text-[14px] font-medium text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>{price}</p>
         </div>
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">24 hour change</p>
-          <p className={`text-[14px] font-medium ${isPositive ? 'text-bullish-green' : 'text-bearish-red'}`} style={{ fontFamily: 'JetBrains Mono, monospace' }}>{change}</p>
+          <p className={`text-[14px] font-medium ${isPositive ? 'text-bullish-green' : 'text-bearish-red'}`} style={{ fontFamily: 'var(--font-mono)' }}>{change}</p>
         </div>
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Open Interest</p>
-          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{openInterest}</p>
+          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{openInterest}</p>
         </div>
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Capacity left</p>
-          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{capacityLeft}</p>
+          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{capacityLeft}</p>
         </div>
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Volume</p>
-          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{volume}</p>
+          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{volume}</p>
         </div>
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Liquidity</p>
-          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{liquidity}</p>
+          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{liquidity}</p>
         </div>
         <div className="shrink-0">
           <p className="text-[11px] text-text-tertiary mb-0.5">Auto-close</p>
-          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{autoClose}</p>
+          <p className="text-[14px] font-medium text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>{autoClose}</p>
         </div>
       </div>
 
@@ -120,7 +120,7 @@ const MarketHeader = ({
               className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-card border border-border-subtle rounded-full text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors shrink-0"
             >
               <span className="font-medium">{m.name}</span>
-              <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{m.price}</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{m.price}</span>
             </Link>
           ))}
         </div>
