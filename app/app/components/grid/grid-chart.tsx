@@ -13,6 +13,7 @@ const EPOCH_MS = 60_000;
 // WIN_PAST / (WIN_PAST + WIN_FUTURE) across the plot.
 const WIN_PAST = 4 * EPOCH_MS;
 const WIN_FUTURE = 6 * EPOCH_MS;
+const CANDLE_MS = 3_000; // tick bucket width for candlestick aggregation
 
 function useSize() {
   const ref = useRef<HTMLDivElement>(null);
@@ -58,6 +59,15 @@ function heatFill(prob: number): { bg: string; border: string } {
   };
 }
 
+// Edge-mode fill: green for +EV cells (your model beats the price), red for
+// house-favored cells. Intensity scales with |EV|.
+function edgeFill(ev: number): { bg: string; border: string } {
+  const t = Math.min(1, Math.abs(ev) / 3);
+  const a = 0.05 + t * 0.45;
+  const rgb = ev >= 0 ? '25,230,189' : '242,53,70';
+  return { bg: `rgba(${rgb},${a.toFixed(3)})`, border: `rgba(${rgb},${(0.2 + t * 0.5).toFixed(3)})` };
+}
+
 interface Hover {
   lower: number;
   upper: number;
@@ -74,6 +84,8 @@ export default function GridChart({ s }: { s: GridState }) {
   const { ref, w, h } = useSize();
   const [hover, setHover] = useState<Hover | null>(null);
   const [chartStyle, setChartStyle] = useState<ChartStyle>('line');
+  const [cellMode, setCellMode] = useState<'mult' | 'edge'>('mult');
+  const [showIso, setShowIso] = useState(false);
 
   // Drag-select state.
   const dragging = useRef(false);
@@ -199,6 +211,23 @@ export default function GridChart({ s }: { s: GridState }) {
         >
           ±${horizonSig.toFixed(1)} / epoch
         </span>
+      </div>
+
+      {/* Chart-style toggle */}
+      <div className="absolute z-20 top-1.5 flex items-center gap-0.5 rounded-[5px] p-0.5" style={{ right: PAD_R + 6, background: 'rgba(255,255,255,0.04)' }}>
+        {(['line', 'candles', 'area'] as const).map((style) => (
+          <button
+            key={style}
+            onClick={() => setChartStyle(style)}
+            className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider transition-colors"
+            style={{
+              background: chartStyle === style ? 'rgba(128,125,254,0.2)' : 'transparent',
+              color: chartStyle === style ? '#a6a3ff' : 'var(--color-text-quaternary)',
+            }}
+          >
+            {style === 'line' ? 'Line' : style === 'candles' ? 'Candle' : 'Area'}
+          </button>
+        ))}
       </div>
 
       {/* Behind: grid lines */}
@@ -346,9 +375,21 @@ export default function GridChart({ s }: { s: GridState }) {
             </feMerge>
           </filter>
         </defs>
-        {linePts && (
+        <defs>
+          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#19e6bd" stopOpacity={0.35} />
+            <stop offset="100%" stopColor="#19e6bd" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+
+        {/* Area fill */}
+        {chartStyle === 'area' && areaPath && (
+          <path d={areaPath} fill="url(#areaFill)" stroke="none" />
+        )}
+
+        {/* Line / area stroke (glow) */}
+        {chartStyle !== 'candles' && linePts && (
           <>
-            {/* soft neon underlay */}
             <polyline
               points={linePts}
               fill="none"
@@ -369,6 +410,32 @@ export default function GridChart({ s }: { s: GridState }) {
             />
           </>
         )}
+
+        {/* Candlesticks */}
+        {chartStyle === 'candles' &&
+          candles.map((cd) => {
+            const up = cd.c >= cd.o;
+            const col = up ? '#19e6bd' : '#f23546';
+            const cx = xOf(cd.t + CANDLE_MS / 2);
+            const yO = yOf(cd.o);
+            const yC = yOf(cd.c);
+            const bodyTop = Math.min(yO, yC);
+            const bodyH = Math.max(1, Math.abs(yC - yO));
+            return (
+              <g key={cd.t}>
+                <line x1={cx} x2={cx} y1={yOf(cd.h)} y2={yOf(cd.l)} stroke={col} strokeWidth={1} />
+                <rect
+                  x={cx - candleW / 2}
+                  y={bodyTop}
+                  width={candleW}
+                  height={bodyH}
+                  fill={col}
+                  opacity={0.9}
+                  rx={0.5}
+                />
+              </g>
+            );
+          })}
         <line
           x1={PAD_L}
           x2={w - PAD_R}
