@@ -7,10 +7,14 @@ const EDGE = 0.06; // house edge baked into multipliers
 const UNIT_PAYOUT = 60; // a winning unit pays this notional
 const BAND_STEP = 4; // dollars per band
 const CENTER = 1674; // anchor price for the strike ladder
-const NUM_BANDS = 12;
+// Wide ladder so the price-anchored viewport always has bands above/below to
+// scroll into; the chart render-filters to the visible price window.
+const NUM_BANDS = 22;
 const EPOCH_MS = 60_000;
-const NUM_PAST = 3;
-const NUM_FUTURE = 7;
+// Wide ladder so the sliding-window chart always has columns to scroll into.
+// Only a handful are on-screen at once; the chart render-filters to the window.
+const NUM_PAST = 6;
+const NUM_FUTURE = 24;
 const TICK_MS = 600;
 
 function gaussianProb(mid: number, price: number, sigma: number): number {
@@ -44,6 +48,10 @@ export interface GridState {
   focusedEpoch: string;
   setFocusedEpoch: (id: string) => void;
   cellFor: (epoch: Epoch, band: Band) => GridCell;
+  // Expected-move cone: ±1σ price half-width at a future timestamp.
+  sigmaAtTime: (t: number) => number;
+  // Settlement price for a past epoch (null if not yet settled).
+  settleOf: (epoch: Epoch) => number | null;
   legs: Map<string, Leg>;
   hasLeg: (key: string) => boolean;
   toggleLeg: (epoch: Epoch, band: Band) => void;
@@ -72,18 +80,6 @@ export function useGridState(): GridState {
     [strikes],
   );
 
-  // Epoch ladder anchored once so columns don't jitter as time advances.
-  const t0 = useMemo(() => Math.floor(Date.now() / EPOCH_MS) * EPOCH_MS, []);
-  const epochs = useMemo<Epoch[]>(
-    () =>
-      Array.from({ length: NUM_PAST + NUM_FUTURE + 1 }, (_, k) => {
-        const rel = k - NUM_PAST;
-        const start = t0 + rel * EPOCH_MS;
-        return { id: `e${rel}`, idx: k, start, end: start + EPOCH_MS };
-      }),
-    [t0],
-  );
-
   // Live price — random walk, with a short rolling history for the chart line.
   const [price, setPrice] = useState(CENTER + 0.6);
   const [now, setNow] = useState(() => Date.now());
@@ -95,14 +91,30 @@ export function useGridState(): GridState {
     const id = setInterval(() => {
       const t = Date.now();
       setPrice((p) => {
-        const next = p + (Math.random() - 0.5) * 1.8;
-        setHistory((h) => [...h.slice(-200), { t, price: next }]);
+        // Mean-reverting walk: keeps price near CENTER so it stays on the
+        // strike ladder while the viewport scrolls vertically around it.
+        const next = p + (CENTER - p) * 0.04 + (Math.random() - 0.5) * 1.8;
+        setHistory((h) => [...h.slice(-600), { t, price: next }]);
         return next;
       });
       setNow(t);
     }, TICK_MS);
     return () => clearInterval(id);
   }, []);
+
+  // Rolling epoch ladder anchored on the current minute, so the chart never runs
+  // out of future columns as wall-clock time advances. Ids are absolute (epoch
+  // index) so leg keys stay valid as columns scroll from future → past.
+  const nowBucket = Math.floor(now / EPOCH_MS);
+  const epochs = useMemo<Epoch[]>(
+    () =>
+      Array.from({ length: NUM_PAST + NUM_FUTURE + 1 }, (_, k) => {
+        const idxAbs = nowBucket - NUM_PAST + k;
+        const start = idxAbs * EPOCH_MS;
+        return { id: `e${idxAbs}`, idx: k, start, end: start + EPOCH_MS };
+      }),
+    [nowBucket],
+  );
 
   const currentEpochId = useMemo(() => {
     const e = epochs.find((ep) => now >= ep.start && now < ep.end);
@@ -181,7 +193,7 @@ export function useGridState(): GridState {
       const tNow = nowRef.current;
       const mid = (band.lower + band.upper) / 2;
       const epochsAhead = Math.max(1, (epoch.end - tNow) / EPOCH_MS);
-      const sigma = 3 + 2.2 * Math.sqrt(epochsAhead);
+      const sigma = sigmaForHorizon(epochsAhead);
       const prob = gaussianProb(mid, p, sigma);
       const multiplier = (1 - EDGE) / prob;
       const cost = Math.round((UNIT_PAYOUT / multiplier) * 100) / 100;
@@ -222,6 +234,17 @@ export function useGridState(): GridState {
     [legs],
   );
 
+  const sigmaAtTime = useCallback(
+    (t: number) => sigmaForHorizon((t - nowRef.current) / EPOCH_MS),
+    [],
+  );
+
+  const settleOf = useCallback(
+    (epoch: Epoch) =>
+      epoch.end <= nowRef.current ? settlementPrice(epoch.start) : null,
+    [],
+  );
+
   const legsArr = useMemo(() => [...legs.values()], [legs]);
   const payoffPoints = useMemo(() => computePayoff(legsArr), [legsArr]);
   const stats = useMemo(() => deriveStats(legsArr), [legsArr]);
@@ -237,6 +260,8 @@ export function useGridState(): GridState {
     focusedEpoch,
     setFocusedEpoch,
     cellFor,
+    sigmaAtTime,
+    settleOf,
     legs,
     hasLeg,
     toggleLeg,

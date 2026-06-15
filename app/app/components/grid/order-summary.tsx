@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { GridState } from './use-grid-state';
+import { computeAnalytics } from './analytics';
 
 function Stat({
   label,
@@ -38,12 +39,30 @@ export default function OrderSummary({ s }: { s: GridState }) {
   const { stats, legsArr } = s;
   const [slipOpen, setSlipOpen] = useState(false);
   const [slip, setSlip] = useState('1.0');
+  const [legsOpen, setLegsOpen] = useState(false);
 
+  const a = computeAnalytics(s);
   const hasLegs = legsArr.length > 0;
   const breakevenStr =
     stats.breakevens.length > 0
       ? stats.breakevens.map((b) => `$${b.toFixed(0)}`).join(' / ')
       : '—';
+
+  // Group legs by band range so a 25-leg basket collapses to a few rows.
+  const grouped = new Map<
+    string,
+    { lower: number; upper: number; count: number; cost: number; payout: number }
+  >();
+  for (const l of legsArr) {
+    const k = `${l.lower}-${l.upper}`;
+    const g =
+      grouped.get(k) ?? { lower: l.lower, upper: l.upper, count: 0, cost: 0, payout: 0 };
+    g.count += 1;
+    g.cost += l.cost;
+    g.payout += l.cost * l.multiplier;
+    grouped.set(k, g);
+  }
+  const groups = [...grouped.values()].sort((x, y) => y.lower - x.lower);
 
   return (
     <div className="flex flex-col h-full text-[11px]">
@@ -55,6 +74,27 @@ export default function OrderSummary({ s }: { s: GridState }) {
       </div>
 
       <div className="flex flex-col gap-2 px-3 py-2.5 flex-1 overflow-auto">
+        {/* prominent EV + win probability */}
+        {hasLegs && (
+          <div className="grid grid-cols-2 gap-2 mb-1">
+            <div className="flex flex-col gap-0.5 bg-surface-card/40 rounded-[8px] px-2.5 py-1.5">
+              <span className="text-[9px] uppercase tracking-wider text-text-quaternary">Exp. value</span>
+              <span
+                className="text-[13px] font-bold"
+                style={{ fontFamily: 'var(--font-mono)', color: a.ev >= 0 ? '#0b9981' : '#f23546' }}
+              >
+                {a.ev >= 0 ? '+$' : '−$'}{Math.abs(a.ev).toFixed(2)}
+              </span>
+            </div>
+            <div className="flex flex-col gap-0.5 bg-surface-card/40 rounded-[8px] px-2.5 py-1.5">
+              <span className="text-[9px] uppercase tracking-wider text-text-quaternary">Win prob</span>
+              <span className="text-[13px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
+                {(a.winProb * 100).toFixed(0)}%
+              </span>
+            </div>
+          </div>
+        )}
+
         <Stat label="Total cost" value={`$${stats.totalCost.toFixed(2)}`} />
         <Stat
           label="Max profit"
@@ -88,19 +128,48 @@ export default function OrderSummary({ s }: { s: GridState }) {
           </div>
         )}
 
-        {/* per-leg breakdown */}
+        {/* grouped leg breakdown (collapsible) */}
         {hasLegs && (
           <div className="border-t border-border-subtle pt-2 mt-1 flex flex-col gap-1">
-            {legsArr.map((l) => (
-              <div key={l.key} className="flex items-center justify-between text-[10px]">
+            <button
+              onClick={() => setLegsOpen((o) => !o)}
+              className="flex items-center justify-between text-[10px] text-text-quaternary hover:text-text-tertiary transition-colors"
+            >
+              <span className="uppercase tracking-wider">
+                {groups.length} band{groups.length === 1 ? '' : 's'} · {legsArr.length} leg
+                {legsArr.length === 1 ? '' : 's'}
+              </span>
+              <span>{legsOpen ? 'Hide' : 'Show'}</span>
+            </button>
+
+            {/* always show the grouped summary; expand for per-band detail */}
+            {groups.map((g) => (
+              <div
+                key={`${g.lower}-${g.upper}`}
+                className="flex items-center justify-between text-[10px]"
+              >
                 <span className="text-text-tertiary" style={{ fontFamily: 'var(--font-mono)' }}>
-                  ${l.lower}–{l.upper}
+                  ${g.lower}–{g.upper}
+                  {g.count > 1 && <span className="text-text-quaternary"> ×{g.count}</span>}
                 </span>
                 <span className="text-text-quaternary" style={{ fontFamily: 'var(--font-mono)' }}>
-                  ${l.cost.toFixed(2)} → ${(l.cost * l.multiplier).toFixed(2)}
+                  ${g.cost.toFixed(2)} → ${g.payout.toFixed(2)}
                 </span>
               </div>
             ))}
+
+            {legsOpen && legsArr.length > groups.length && (
+              <div className="flex flex-col gap-0.5 mt-1 pl-2 border-l border-border-subtle">
+                {legsArr.map((l) => (
+                  <div key={l.key} className="flex items-center justify-between text-[9px] text-text-quaternary">
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>${l.lower}–{l.upper}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>
+                      ${l.cost.toFixed(2)} → ${(l.cost * l.multiplier).toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
