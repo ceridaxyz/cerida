@@ -48,6 +48,9 @@ const BottomTabs = lazy(() => import('../../components/market/bottom-tabs'));
 const TradingPanel = lazy(
   () => import('../../components/market/trading-panel'),
 );
+const RangeTrading = lazy(
+  () => import('../../components/trading/range-trading'),
+);
 
 // ── Skeletons ──────────────────────────────────────────────────────────────────
 
@@ -87,7 +90,7 @@ const BottomTabsSkeleton = () => (
 // ── Widget catalog ───────────────────────────────────────────────────────────
 // Every available widget type, its default footprint, and its content.
 
-type WidgetType = 'chart' | 'book' | 'trade' | 'positions' | 'panel';
+type WidgetType = 'chart' | 'book' | 'trade' | 'range' | 'positions' | 'panel';
 
 interface WidgetSpec {
   label: string;
@@ -122,13 +125,25 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
   },
   trade: {
     label: 'Trade',
-    w: 5,
-    h: 12,
+    w: 8,
+    h: 7,
     minW: 4,
-    minH: 4,
+    minH: 5,
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <TradingPanel />
+      </Suspense>
+    ),
+  },
+  range: {
+    label: 'Range',
+    w: 5,
+    h: 6,
+    minW: 4,
+    minH: 5,
+    render: () => (
+      <Suspense fallback={<TradeSkeleton />}>
+        <RangeTrading />
       </Suspense>
     ),
   },
@@ -302,6 +317,7 @@ const INITIAL_ITEMS: Item[] = [
   { id: 'chart', type: 'chart' },
   { id: 'book', type: 'book' },
   { id: 'trade', type: 'trade' },
+  { id: 'range', type: 'range' },
   { id: 'positions', type: 'positions' },
 ];
 
@@ -310,7 +326,8 @@ const INITIAL_LAYOUT: Layout = [
   { i: 'panel-bottom', x: 0, y: 6, w: 4, h: 6, minW: 2, minH: 3 },
   { i: 'chart', x: 4, y: 0, w: 9, h: 8, minW: 4, minH: 3 },
   { i: 'book', x: 13, y: 0, w: 6, h: 8, minW: 3, minH: 3 },
-  { i: 'trade', x: 19, y: 0, w: 5, h: 12, minW: 4, minH: 4 },
+  { i: 'trade', x: 19, y: 0, w: 5, h: 6, minW: 4, minH: 3 },
+  { i: 'range', x: 19, y: 5, w: 5, h: 6, minW: 4, minH: 5 },
   { i: 'positions', x: 4, y: 8, w: 15, h: 4, minW: 4, minH: 2 },
 ];
 

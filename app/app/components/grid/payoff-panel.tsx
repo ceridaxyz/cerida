@@ -20,6 +20,7 @@ function useSize() {
 function PayoffDiagram({ s }: { s: GridState }) {
   const { ref, w, h } = useSize();
   const pts = s.payoffPoints;
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   if (pts.length === 0) {
     return (
@@ -53,6 +54,7 @@ function PayoffDiagram({ s }: { s: GridState }) {
     PAD + ((yMax - pnl) / (yMax - yMin || 1)) * plotH;
 
   const zeroY = yOf(0);
+  const hoverPt = hoverIdx == null ? null : pts[hoverIdx] ?? null;
 
   // Build the step area split at the zero line for green/red fills.
   const linePath = pts
@@ -74,9 +76,23 @@ function PayoffDiagram({ s }: { s: GridState }) {
   for (let i = 1; i < pts.length; i++) if (pts[i]!.pnl > pts[maxI]!.pnl) maxI = i;
   const maxPt = pts[maxI]!;
 
+  const handleMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const frac = Math.max(0, Math.min(1, x / rect.width));
+    const idx = Math.max(0, Math.min(pts.length - 1, Math.round(frac * (pts.length - 1))));
+    setHoverIdx(idx);
+  };
+
   return (
     <div ref={ref} className="h-full w-full">
-      <svg width={w} height={h}>
+      <svg
+        width={w}
+        height={h}
+        onPointerMove={handleMove}
+        onPointerLeave={() => setHoverIdx(null)}
+        className="cursor-crosshair"
+      >
         <path d={areaPos} fill="rgba(11,153,129,0.18)" />
         <path d={areaNeg} fill="rgba(242,53,70,0.15)" />
 
@@ -106,6 +122,43 @@ function PayoffDiagram({ s }: { s: GridState }) {
 
         {/* payoff step line */}
         <path d={linePath} fill="none" stroke="#807dfe" strokeWidth={1.75} />
+
+        {/* hover crosshair + tooltip */}
+        {hoverPt && (
+          <>
+            <line
+              x1={xOf(hoverPt.price)}
+              x2={xOf(hoverPt.price)}
+              y1={PAD}
+              y2={h - PAD_B}
+              stroke="rgba(255,255,255,0.32)"
+              strokeWidth={1}
+              strokeDasharray="3 3"
+            />
+            <circle cx={xOf(hoverPt.price)} cy={yOf(hoverPt.pnl)} r={4} fill="#807dfe" />
+            <g transform={`translate(${xOf(hoverPt.price)}, ${Math.max(PAD + 8, yOf(hoverPt.pnl) - 10)})`}>
+              <rect
+                x={-46}
+                y={-26}
+                width={92}
+                height={22}
+                rx={6}
+                fill="rgba(8,10,18,0.96)"
+                stroke="rgba(255,255,255,0.16)"
+              />
+              <text
+                x={0}
+                y={-12}
+                fill="#fff"
+                fontSize={9}
+                textAnchor="middle"
+                style={{ fontFamily: 'var(--font-mono)' }}
+              >
+                ${hoverPt.price.toFixed(0)} · {hoverPt.pnl >= 0 ? '+' : '-'}${Math.abs(hoverPt.pnl).toFixed(0)}
+              </text>
+            </g>
+          </>
+        )}
 
         {/* max profit marker */}
         <circle cx={xOf(maxPt.price)} cy={yOf(maxPt.pnl)} r={3} fill="#0b9981" />

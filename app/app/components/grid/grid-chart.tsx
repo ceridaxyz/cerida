@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { GridState } from './use-grid-state';
 import type { Band, Epoch } from './types';
+import { realizedVol } from './analytics';
 
 const PAD_T = 8;
 const PAD_B = 22;
@@ -13,7 +14,7 @@ const EPOCH_MS = 60_000;
 // WIN_PAST / (WIN_PAST + WIN_FUTURE) across the plot.
 const WIN_PAST = 4 * EPOCH_MS;
 const WIN_FUTURE = 6 * EPOCH_MS;
-const CANDLE_MS = 3_000; // tick bucket width for candlestick aggregation
+const CANDLE_MS = 4_500; // tick bucket width for candlestick aggregation
 
 function useSize() {
   const ref = useRef<HTMLDivElement>(null);
@@ -78,7 +79,7 @@ interface Hover {
   my: number;
 }
 
-type ChartStyle = 'line' | 'candles' | 'area';
+type ChartStyle = 'line' | 'candles' | 'heikin' | 'area';
 
 export default function GridChart({ s }: { s: GridState }) {
   const { ref, w, h } = useSize();
@@ -86,6 +87,7 @@ export default function GridChart({ s }: { s: GridState }) {
   const [chartStyle, setChartStyle] = useState<ChartStyle>('line');
   const [cellMode, setCellMode] = useState<'mult' | 'edge'>('mult');
   const [showIso, setShowIso] = useState(false);
+  const isCandle = chartStyle === 'candles' || chartStyle === 'heikin';
 
   // Drag-select state.
   const dragging = useRef(false);
@@ -146,9 +148,25 @@ export default function GridChart({ s }: { s: GridState }) {
   }
   const conePath = `M${coneUpper.join(' L')} L${[...coneLower].reverse().join(' L')} Z`;
 
-  // Header analytics: 1σ move one epoch out, and an annualized implied vol.
+  // Probability isolines: equal-probability contours = price ± k·σ(t) across the
+  // future window. Together they form the expected-range corridor.
+  const isoSteps = 20;
+  const isoline = (k: number, side: 1 | -1) => {
+    const pts: string[] = [];
+    for (let i = 0; i <= isoSteps; i++) {
+      const t = s.now + ((winEnd - s.now) * i) / isoSteps;
+      pts.push(`${xOf(t).toFixed(1)},${yOf(s.price + side * k * s.sigmaAtTime(t)).toFixed(1)}`);
+    }
+    return pts.join(' ');
+  };
+  const isoLevels = [0.5, 1, 1.5];
+
+  // Header analytics: 1σ move one epoch out, implied vol, and realized vol.
   const horizonSig = s.sigmaAtTime(s.now + EPOCH_MS);
   const ivPct = (horizonSig / s.price) * Math.sqrt(SECONDS_PER_YEAR / 60) * 100;
+  const rvPct = realizedVol(s.history);
+  const ivRv = rvPct > 0 ? ivPct / rvPct : 0;
+  const rich = ivRv >= 1.1 ? 'RICH' : ivRv > 0 && ivRv <= 0.9 ? 'CHEAP' : 'FAIR';
 
   const windowHist = s.history.filter((p) => p.t >= winStart && p.t <= s.now);
 
@@ -164,9 +182,10 @@ export default function GridChart({ s }: { s: GridState }) {
         `L${nowX.toFixed(1)},${(h - PAD_B).toFixed(1)} Z`
       : '';
 
-  // OHLC candles aggregated from ticks into fixed-time buckets.
+  // OHLC candles aggregated from ticks into fixed-time buckets. Heikin-Ashi
+  // smooths each candle off the previous HA open/close.
   const candles = (() => {
-    if (chartStyle !== 'candles') return [];
+    if (!isCandle) return [];
     const buckets = new Map<number, { o: number; h: number; l: number; c: number; t: number }>();
     for (const p of windowHist) {
       const b = Math.floor(p.t / CANDLE_MS) * CANDLE_MS;
@@ -178,7 +197,20 @@ export default function GridChart({ s }: { s: GridState }) {
         cur.c = p.price;
       }
     }
-    return [...buckets.values()];
+    const raw = [...buckets.values()].sort((x, y) => x.t - y.t);
+    if (chartStyle === 'candles') return raw;
+    // Heikin-Ashi
+    const ha: typeof raw = [];
+    let pO: number | undefined;
+    let pC: number | undefined;
+    for (const r of raw) {
+      const close = (r.o + r.h + r.l + r.c) / 4;
+      const open = pO === undefined ? (r.o + r.c) / 2 : (pO + pC!) / 2;
+      ha.push({ o: open, c: close, h: Math.max(r.h, open, close), l: Math.min(r.l, open, close), t: r.t });
+      pO = open;
+      pC = close;
+    }
+    return ha;
   })();
   const candleW = Math.max(2, (CANDLE_MS / tSpan) * plotW - 1.5);
 
@@ -196,40 +228,89 @@ export default function GridChart({ s }: { s: GridState }) {
   };
 
   return (
-    <div ref={ref} className="relative h-full w-full overflow-hidden select-none">
-      {/* Header chips: implied vol + expected move */}
-      <div className="absolute z-20 left-2 top-1.5 flex items-center gap-1.5 pointer-events-none">
+    <div className="flex flex-col h-full w-full">
+      {/* Toolbar — all overlays/toggles live here, off the grid */}
+      <div className="flex items-center gap-1.5 px-2 h-8 shrink-0 border-b border-border-subtle overflow-x-auto">
         <span
-          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider"
+          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider shrink-0"
           style={{ background: 'rgba(128,125,254,0.15)', color: '#a6a3ff', fontFamily: 'var(--font-mono)' }}
         >
           IV {ivPct.toFixed(0)}%
         </span>
         <span
-          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-medium tracking-wider text-text-quaternary"
+          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider shrink-0"
+          style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}
+        >
+          RV {rvPct.toFixed(0)}%
+        </span>
+        {rich !== 'FAIR' && (
+          <span
+            className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-wider shrink-0"
+            style={{
+              background: rich === 'RICH' ? 'rgba(242,53,70,0.16)' : 'rgba(25,230,189,0.16)',
+              color: rich === 'RICH' ? '#f23546' : '#19e6bd',
+              fontFamily: 'var(--font-mono)',
+            }}
+            title={`IV/RV ${ivRv.toFixed(2)}× — options ${rich === 'RICH' ? 'expensive vs realized' : 'cheap vs realized'}`}
+          >
+            {rich} {ivRv.toFixed(2)}×
+          </span>
+        )}
+        <span
+          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-medium tracking-wider text-text-quaternary shrink-0"
           style={{ background: 'rgba(255,255,255,0.04)', fontFamily: 'var(--font-mono)' }}
         >
           ±${horizonSig.toFixed(1)} / epoch
         </span>
+
+        {/* mult / edge */}
+        <div className="flex items-center gap-0.5 rounded-[5px] p-0.5 ml-1 shrink-0" style={{ background: 'rgba(255,255,255,0.04)' }}>
+          {(['mult', 'edge'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setCellMode(m)}
+              className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider transition-colors"
+              style={{
+                background: cellMode === m ? 'rgba(128,125,254,0.2)' : 'transparent',
+                color: cellMode === m ? '#a6a3ff' : 'var(--color-text-quaternary)',
+              }}
+            >
+              {m === 'mult' ? 'Mult' : 'Edge'}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={() => setShowIso((v) => !v)}
+          className="px-1.5 py-1 rounded-[5px] text-[9px] font-semibold uppercase tracking-wider transition-colors shrink-0"
+          style={{
+            background: showIso ? 'rgba(128,125,254,0.2)' : 'rgba(255,255,255,0.04)',
+            color: showIso ? '#a6a3ff' : 'var(--color-text-quaternary)',
+          }}
+        >
+          Corridor
+        </button>
+
+        {/* chart style — pushed to the right */}
+        <div className="flex items-center gap-0.5 rounded-[5px] p-0.5 ml-auto shrink-0" style={{ background: 'rgba(255,255,255,0.04)' }}>
+          {(['line', 'candles', 'heikin', 'area'] as const).map((style) => (
+            <button
+              key={style}
+              onClick={() => setChartStyle(style)}
+              className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider transition-colors"
+              style={{
+                background: chartStyle === style ? 'rgba(128,125,254,0.2)' : 'transparent',
+                color: chartStyle === style ? '#a6a3ff' : 'var(--color-text-quaternary)',
+              }}
+            >
+              {style === 'line' ? 'Line' : style === 'candles' ? 'Candle' : style === 'heikin' ? 'HA' : 'Area'}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Chart-style toggle */}
-      <div className="absolute z-20 top-1.5 flex items-center gap-0.5 rounded-[5px] p-0.5" style={{ right: PAD_R + 6, background: 'rgba(255,255,255,0.04)' }}>
-        {(['line', 'candles', 'area'] as const).map((style) => (
-          <button
-            key={style}
-            onClick={() => setChartStyle(style)}
-            className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider transition-colors"
-            style={{
-              background: chartStyle === style ? 'rgba(128,125,254,0.2)' : 'transparent',
-              color: chartStyle === style ? '#a6a3ff' : 'var(--color-text-quaternary)',
-            }}
-          >
-            {style === 'line' ? 'Line' : style === 'candles' ? 'Candle' : 'Area'}
-          </button>
-        ))}
-      </div>
-
+      {/* Chart area */}
+      <div ref={ref} className="relative flex-1 overflow-hidden select-none">
       {/* Behind: grid lines */}
       <svg className="absolute inset-0 pointer-events-none" width={w} height={h}>
         {visibleStrikes.map((p) => (
@@ -271,6 +352,23 @@ export default function GridChart({ s }: { s: GridState }) {
           strokeWidth={1}
           strokeDasharray="2 3"
         />
+
+        {/* Probability isolines — expected-range corridor */}
+        {showIso &&
+          isoLevels.flatMap((k) =>
+            ([1, -1] as const).map((side) => (
+              <polyline
+                key={`iso${k}-${side}`}
+                points={isoline(k, side)}
+                fill="none"
+                stroke="#a6a3ff"
+                strokeWidth={k === 1 ? 1.4 : 1}
+                strokeLinecap="round"
+                opacity={k === 0.5 ? 0.7 : k === 1 ? 0.5 : 0.3}
+                filter="url(#priceGlow)"
+              />
+            )),
+          )}
       </svg>
 
       {/* Cells — every visible epoch (past = settled, current/future = tradeable) */}
@@ -283,9 +381,19 @@ export default function GridChart({ s }: { s: GridState }) {
           const top = yOf(band.upper);
           const ch = yOf(band.lower) - top;
           const base = cellColors[cell.state];
-          // Heat-map only the plain tradeable cells; keep semantic states bold.
-          const heat = cell.state === 'available' ? heatFill(cell.prob) : null;
-          const c = heat ? { ...base, bg: heat.bg, border: heat.border } : base;
+          // Your-model EV vs the priced multiplier. A tilt (you expect calmer
+          // realized vol than implied) makes centre bands underpriced → +EV,
+          // tails overpriced → −EV.
+          let ev = 0;
+          let c: { bg: string; border: string; opacity: number } = base;
+          if (cell.state === 'available') {
+            const mid = (band.lower + band.upper) / 2;
+            const closeness = Math.exp(-0.5 * ((mid - s.price) / (3 * strikeStep)) ** 2);
+            const yourProb = Math.max(0, Math.min(1, cell.prob * (1 + 0.18 * (2 * closeness - 1))));
+            ev = yourProb * cell.cost * cell.multiplier - cell.cost;
+            const f = cellMode === 'edge' ? edgeFill(ev) : heatFill(cell.prob);
+            c = { ...base, bg: f.bg, border: f.border };
+          }
           const big = cw > 46 && ch > 22;
           const isFocused = epoch.id === s.focusedEpoch;
           return (
@@ -335,8 +443,19 @@ export default function GridChart({ s }: { s: GridState }) {
               }}
             >
               {big && cell.state === 'available' && (
-                <span className="text-[10px] font-semibold text-text-tertiary" style={{ fontFamily: 'var(--font-mono)' }}>
-                  {cell.multiplier.toFixed(2)}x
+                <span
+                  className="text-[10px] font-semibold"
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    color:
+                      cellMode === 'edge'
+                        ? ev >= 0 ? '#19e6bd' : '#f23546'
+                        : 'var(--color-text-tertiary)',
+                  }}
+                >
+                  {cellMode === 'edge'
+                    ? `${ev >= 0 ? '+' : '−'}$${Math.abs(ev).toFixed(1)}`
+                    : `${cell.multiplier.toFixed(2)}x`}
                 </span>
               )}
               {big && cell.state === 'selected' && (
@@ -388,7 +507,7 @@ export default function GridChart({ s }: { s: GridState }) {
         )}
 
         {/* Line / area stroke (glow) */}
-        {chartStyle !== 'candles' && linePts && (
+        {!isCandle && linePts && (
           <>
             <polyline
               points={linePts}
@@ -411,27 +530,38 @@ export default function GridChart({ s }: { s: GridState }) {
           </>
         )}
 
-        {/* Candlesticks */}
-        {chartStyle === 'candles' &&
-          candles.map((cd) => {
+        {/* Candlesticks / Heikin-Ashi — hollow up, filled down, glowing last */}
+        {isCandle &&
+          candles.map((cd, i) => {
             const up = cd.c >= cd.o;
             const col = up ? '#19e6bd' : '#f23546';
+            const forming = i === candles.length - 1;
             const cx = xOf(cd.t + CANDLE_MS / 2);
-            const yO = yOf(cd.o);
-            const yC = yOf(cd.c);
-            const bodyTop = Math.min(yO, yC);
-            const bodyH = Math.max(1, Math.abs(yC - yO));
+            const bodyTop = Math.min(yOf(cd.o), yOf(cd.c));
+            const bodyH = Math.max(1.2, Math.abs(yOf(cd.c) - yOf(cd.o)));
+            const bw = forming ? candleW + 1 : candleW;
             return (
-              <g key={cd.t}>
-                <line x1={cx} x2={cx} y1={yOf(cd.h)} y2={yOf(cd.l)} stroke={col} strokeWidth={1} />
+              <g key={cd.t} filter={forming ? 'url(#priceGlow)' : undefined} opacity={forming ? 1 : 0.92}>
+                {/* wick */}
+                <line
+                  x1={cx}
+                  x2={cx}
+                  y1={yOf(cd.h)}
+                  y2={yOf(cd.l)}
+                  stroke={col}
+                  strokeWidth={forming ? 1.3 : 1}
+                  strokeLinecap="round"
+                />
+                {/* body — up candles hollow, down candles filled */}
                 <rect
-                  x={cx - candleW / 2}
+                  x={cx - bw / 2}
                   y={bodyTop}
-                  width={candleW}
+                  width={bw}
                   height={bodyH}
-                  fill={col}
-                  opacity={0.9}
-                  rx={0.5}
+                  rx={1}
+                  fill={up ? `${col}26` : col}
+                  stroke={col}
+                  strokeWidth={1.1}
                 />
               </g>
             );
@@ -567,6 +697,7 @@ export default function GridChart({ s }: { s: GridState }) {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

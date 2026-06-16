@@ -1,168 +1,258 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
+// ── On-chain mapping ────────────────────────────────────────────────────────────
+// A range bet is predict::mint_range over RangeKey(oracle_id, expiry,
+// lower_strike, higher_strike) with lower < higher. You mint `quantity` range
+// tokens and win `quantity` quote if price settles in [lower, higher] at expiry.
+// Cost = quantity × ask, where ask = SVI fair price + spread, bounded by
+// ask_bounds. Strikes live on the oracle's tick grid; all values are 1e9-scaled.
+
 const PRICE_SCALE = 1_000_000_000
 const DUSDC_SCALE = 1_000_000
+const toChainPrice = (p: number) => Math.round(p * PRICE_SCALE)
+const toChainDusdc = (usd: number) => Math.round(usd * DUSDC_SCALE)
 
-function toChainPrice(p: number) { return Math.round(p * PRICE_SCALE) }
-function toChainDusdc(usd: number) { return Math.round(usd * DUSDC_SCALE) }
-
-const EXPIRY_OPTIONS = [
-  { label: '1h', ms: 60 * 60 * 1_000 },
-  { label: '6h', ms: 6 * 60 * 60 * 1_000 },
-  { label: '1d', ms: 24 * 60 * 60 * 1_000 },
-  { label: '7d', ms: 7 * 24 * 60 * 60 * 1_000 },
-]
-
-// ── Zone taxonomy ───────────────────────────────────────────────────────────────
-
-type Category = 'buy' | 'structure' | 'bear' | 'regulatory' | 'breakout'
-
-const CATEGORIES: Record<Category, { label: string; color: string }> = {
-  buy: { label: 'Buy zones', color: '#34a877' },
-  structure: { label: 'Structure', color: '#565d68' },
-  bear: { label: 'Bear scenarios', color: '#c2912f' },
-  regulatory: { label: 'Regulatory tail', color: '#c25555' },
-  breakout: { label: 'Breakout', color: '#807dfe' },
+// The oracle quotes strikes on a $1 tick (tick_size 1e9) from min_strike $50k.
+// For a ~$66k asset that's far too fine to display, so the UI groups ticks into
+// a coarse "nice" strike step scaled to the price magnitude.
+const NUM_BANDS = 12
+const HEAT = 1.3 // fixed probability-heat intensity (drama)
+const niceStep = (price: number) => {
+  const target = price * 0.0035 // ≈ band every 0.35% of spot
+  const pow = 10 ** Math.floor(Math.log10(target))
+  const mult = [1, 2, 2.5, 5, 10].find((m) => m * pow >= target) ?? 10
+  return mult * pow // e.g. $250 at $66k, $5 at $1.7k
 }
 
-// Proportional zone map (fractions of the price domain), left→right.
-const ZONE_PLAN: { frac: number; cat: Category }[] = [
-  { frac: 0.15, cat: 'regulatory' },
-  { frac: 0.10, cat: 'bear' },
-  { frac: 0.10, cat: 'buy' },
-  { frac: 0.07, cat: 'structure' },
-  { frac: 0.08, cat: 'buy' },
-  { frac: 0.10, cat: 'structure' },
-  { frac: 0.10, cat: 'buy' },
-  { frac: 0.11, cat: 'structure' },
-  { frac: 0.10, cat: 'structure' },
-  { frac: 0.09, cat: 'breakout' },
-]
+// Spread applied over the SVI fair price (mirrors pricing_config.base_spread),
+// and the post-spread ask bounds (pricing_config min/max ask).
+const SPREAD = 0.025
+const MIN_ASK = 0.01
+const MAX_ASK = 0.99
 
-interface Zone {
+// σ grows ~√t with time-to-expiry, so near-dated markets tighten the
+// distribution (theta-like) and far-dated ones spread it across more strikes.
+const sigmaFor = (hrs: number, step: number) => step * 2 * Math.sqrt(Math.max(hrs, 0.01))
+
+// Normal CDF (Abramowitz–Stegun erf) for SVI-style range probabilities.
+function erf(x: number) {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x))
+  const y =
+    1 -
+    (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) *
+      t *
+      Math.exp(-x * x))
+  return x >= 0 ? y : -y
+}
+const normCdf = (x: number) => 0.5 * (1 + erf(x / Math.SQRT2))
+
+// Dramatic probability heat: cold indigo tails → blazing amber near the money.
+// `t01` is the band's probability relative to the hottest band; `intensity`
+// (≈0.4–2.5) scales the drama.
+function heatColor(t01: number, intensity: number) {
+  const t = Math.pow(Math.min(1, t01), 0.6)
+  const a = Math.min(0.95, (0.03 + t * 0.62) * intensity)
+  const r = Math.round(96 + t * 159) // 96 → 255
+  const g = Math.round(92 + t * 96) // 92 → 188
+  const b = Math.round(255 - t * 225) // 255 → 30
+  return `rgba(${r},${g},${b},${a.toFixed(3)})`
+}
+
+// Thousands-separated strike, e.g. 66500 → "66,500".
+const fmtStrike = (p: number) => p.toLocaleString('en-US', { maximumFractionDigits: 0 })
+
+interface Band {
   idx: number
-  lo: number
-  hi: number
-  cat: Category
+  lower: number
+  upper: number
 }
 
 interface Props {
   currentPrice?: number
   oracleId?: string
+  // Expiry is a property of the selected oracle (from GET /oracles), not a user
+  // choice. Defaults to ~1h out for the standalone demo.
+  oracleExpiry?: number
+  underlying?: string
   onSubmit?: (params: {
     oracleId: string; expiry: number
     lower: number; higher: number; qty: number; maxCost: number
   }) => void
 }
 
-export default function RangeTrading({ currentPrice = 55.4, oracleId = '', onSubmit }: Props) {
-  // Fixed price domain + zones, anchored once so the map doesn't jitter.
-  const center = currentPrice
-  const domainLo = useMemo(() => center * 0.55, [center])
-  const domainHi = useMemo(() => center * 1.38, [center])
+export default function RangeTrading({
+  currentPrice = 66612, // BTC spot from /oracles state (demo default)
+  oracleId = '',
+  oracleExpiry,
+  underlying = 'BTC',
+  onSubmit,
+}: Props) {
+  // The oracle's expiry timestamp (fixed by the market, not chosen here).
+  const expiry = useMemo(() => oracleExpiry ?? Date.now() + 60 * 60_000, [oracleExpiry])
+  // Display strike step scaled to the asset's price magnitude (BTC ~$66k → $250).
+  const STRIKE_STEP = useMemo(() => niceStep(currentPrice), [currentPrice])
+  // Visible strike count — scroll the bar to zoom the range in/out.
+  const [numBands, setNumBands] = useState(NUM_BANDS)
+  // Strike ladder around the current price (snapped to the display grid).
+  const strikes = useMemo(() => {
+    const base = Math.round(currentPrice / STRIKE_STEP) * STRIKE_STEP - (numBands / 2) * STRIKE_STEP
+    return Array.from({ length: numBands + 1 }, (_, i) => base + i * STRIKE_STEP)
+  }, [currentPrice, STRIKE_STEP, numBands])
+  const bands = useMemo<Band[]>(
+    () => strikes.slice(0, -1).map((lo, i) => ({ idx: i, lower: lo, upper: strikes[i + 1]! })),
+    [strikes],
+  )
+  const domainLo = strikes[0]!
+  const domainHi = strikes[strikes.length - 1]!
   const span = domainHi - domainLo
 
-  const zones = useMemo<Zone[]>(() => {
-    let acc = domainLo
-    return ZONE_PLAN.map((z, idx) => {
-      const lo = acc
-      const hi = acc + z.frac * span
-      acc = hi
-      return { idx, lo, hi, cat: z.cat }
-    })
-  }, [domainLo, span])
-
-  // Live price — gentle random walk inside the domain.
-  const [price, setPrice] = useState(center)
+  // Live price — gentle mean-reverting walk inside the ladder.
+  const [price, setPrice] = useState(currentPrice)
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => {
       setPrice((p) => {
-        const next = p + (Math.random() - 0.5) * span * 0.012
-        return Math.max(domainLo + span * 0.02, Math.min(domainHi - span * 0.02, next))
+        const next = p + (currentPrice - p) * 0.05 + (Math.random() - 0.5) * STRIKE_STEP * 0.5
+        return Math.max(domainLo + 0.5, Math.min(domainHi - 0.5, next))
       })
+      setNow(Date.now())
     }, 700)
     return () => clearInterval(id)
-  }, [domainLo, domainHi, span])
+  }, [currentPrice, domainLo, domainHi, STRIKE_STEP])
 
-  const priceZone = zones.find((z) => price >= z.lo && price < z.hi) ?? zones[0]!
+  // σ from the oracle's actual time-to-expiry.
+  const secsToExpiry = Math.max(1, (expiry - now) / 1000)
+  const sigma = sigmaFor(secsToExpiry / 3600, STRIKE_STEP)
+  const mmss = `${Math.floor(secsToExpiry / 3600) > 0 ? Math.floor(secsToExpiry / 3600) + 'h ' : ''}${Math.floor((secsToExpiry % 3600) / 60)}m ${Math.floor(secsToExpiry % 60)}s`
 
-  // ── Selection (contiguous zones) ───────────────────────────────────────────
-  const startZone = useMemo(
-    () => zones.find((z) => center >= z.lo && center < z.hi) ?? zones[Math.floor(zones.length / 2)]!,
-    [zones, center],
-  )
-  const [sel, setSel] = useState<[number, number]>([startZone.idx, startZone.idx])
+  // Selection stored as price bounds (not band indices) so it survives zoom.
+  const snap0 = Math.round(currentPrice / STRIKE_STEP) * STRIKE_STEP
+  const [selLo, setSelLo] = useState(snap0)
+  const [selHi, setSelHi] = useState(snap0 + STRIKE_STEP)
   const dragging = useRef(false)
-  const [a, b] = [Math.min(sel[0], sel[1]), Math.max(sel[0], sel[1])]
-  const lower = zones[a]!.lo
-  const higher = zones[b]!.hi
-  const selected = (i: number) => i >= a && i <= b
+  const anchor = useRef({ lo: selLo, hi: selHi })
+  const lower = Math.min(selLo, selHi)
+  const higher = Math.max(selLo, selHi)
+  const selected = (band: Band) => band.lower >= lower && band.upper <= higher
 
   useEffect(() => {
     const up = () => (dragging.current = false)
     window.addEventListener('pointerup', up)
     return () => window.removeEventListener('pointerup', up)
   }, [])
-
-  const onZoneDown = useCallback((i: number) => {
+  const onDown = useCallback((band: Band) => {
     dragging.current = true
-    setSel([i, i])
+    anchor.current = { lo: band.lower, hi: band.upper }
+    setSelLo(band.lower)
+    setSelHi(band.upper)
   }, [])
-  const onZoneEnter = useCallback((i: number) => {
-    if (dragging.current) setSel((s) => [s[0], i])
+  const onEnter = useCallback((band: Band) => {
+    if (!dragging.current) return
+    setSelLo(Math.min(anchor.current.lo, band.lower))
+    setSelHi(Math.max(anchor.current.hi, band.upper))
   }, [])
 
-  // ── Trade params ───────────────────────────────────────────────────────────
-  const [expiryIdx, setExpiryIdx] = useState(2)
-  const [qty, setQty] = useState('1')
-  const [maxCostRaw, setMaxCost] = useState('')
-  const qtyNum = parseInt(qty) || 0
-  const maxCost = parseFloat(maxCostRaw) || 0
+  // Drag an edge handle to resize the range (snaps to the strike grid).
+  const dragHandle = (which: 'lo' | 'hi') => (e: React.PointerEvent) => {
+    e.stopPropagation()
+    const rect = barRef.current!.getBoundingClientRect()
+    const move = (ev: PointerEvent) => {
+      const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width))
+      const snapped = Math.max(
+        domainLo,
+        Math.min(domainHi, Math.round((domainLo + frac * span) / STRIKE_STEP) * STRIKE_STEP),
+      )
+      if (which === 'lo') setSelLo(Math.min(snapped, higher - STRIKE_STEP))
+      else setSelHi(Math.max(snapped, lower + STRIKE_STEP))
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
-  const widthFrac = (higher - lower) / span
-  const prob = Math.max(0.02, Math.min(0.95, widthFrac))
-  const estCost = prob * qtyNum
-  const profit = qtyNum - estCost
+  // Per-band SVI probability (for the heat colouring).
+  const bandProb = (band: Band) => normCdf((band.upper - price) / sigma) - normCdf((band.lower - price) / sigma)
+
+  // ── Pricing — fair price + spread, bounded by ask_bounds ───────────────────
+  const fair = normCdf((higher - price) / sigma) - normCdf((lower - price) / sigma)
+  const askPerUnit = Math.max(MIN_ASK, Math.min(MAX_ASK, fair + SPREAD))
+  const winProb = fair
   const priceInRange = price >= lower && price < higher
-  const canSubmit = qtyNum > 0 && lower < higher
+
+  // The user bets a dollar amount; quantity (units paying $1 each) is derived as
+  // amount / ask. Payout = quantity, so you "bet $X to win $Y".
+  const [hover, setHover] = useState<Band | null>(null)
+
+  // Scroll the bar to zoom the visible strike range in/out. Accumulate the
+  // wheel delta so trackpad momentum doesn't blast through the range.
+  const barRef = useRef<HTMLDivElement>(null)
+  const wheelAcc = useRef(0)
+  useEffect(() => {
+    const el = barRef.current
+    if (!el) return
+    const THRESHOLD = 140
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      wheelAcc.current += e.deltaY
+      if (Math.abs(wheelAcc.current) < THRESHOLD) return
+      const dir = wheelAcc.current > 0 ? 2 : -2
+      wheelAcc.current = 0
+      setNumBands((n) => Math.max(6, Math.min(30, n + dir)))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  const [amountRaw, setAmount] = useState('25')
+  const amount = parseFloat(amountRaw) || 0
+  const qtyNum = amount > 0 ? amount / askPerUnit : 0 // units of $1 payout
+  const maxPayout = qtyNum // win → qty quote
+  const multiple = amount > 0 ? maxPayout / amount : 0 // 1 / ask
+  const canSubmit = amount > 0 && qtyNum > 0 && lower < higher
 
   function handleSubmit() {
     if (!canSubmit || !onSubmit) return
     onSubmit({
       oracleId,
-      expiry: Date.now() + EXPIRY_OPTIONS[expiryIdx]!.ms,
+      expiry,
       lower: toChainPrice(lower),
       higher: toChainPrice(higher),
-      qty: qtyNum,
-      maxCost: toChainDusdc(maxCost),
+      qty: Math.floor(qtyNum), // integer mint_range quantity
+      maxCost: toChainDusdc(amount), // you never pay more than your stake
     })
   }
 
   const pctOf = (p: number) => ((p - domainLo) / span) * 100
+  const maxBandProb = Math.max(...bands.map(bandProb), 0.01)
 
   return (
     <div className="flex flex-col h-full bg-surface-primary text-[12px]">
-      <div className="flex flex-col gap-3 px-3 py-3 flex-1 overflow-auto">
+      <div className="flex flex-col gap-3 px-3 py-3 flex-1 overflow-y-auto overflow-x-hidden">
 
         {/* Lands-in header */}
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-text-tertiary">Lands in:</span>
-          <span
-            className="flex items-center gap-1.5 px-2 py-1 rounded-[6px] text-[11px] font-semibold"
-            style={{ background: 'var(--color-surface-card)', color: 'var(--color-text-primary)' }}
-          >
-            <span className="w-2 h-2 rounded-[2px]" style={{ background: CATEGORIES[priceZone.cat].color }} />
-            {CATEGORIES[priceZone.cat].label}
-            <span className="text-text-quaternary" style={{ fontFamily: 'var(--font-mono)' }}>
-              ${priceZone.lo.toFixed(0)}–{priceZone.hi.toFixed(0)}
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-text-tertiary">
+            Lands in: <span className="text-text-secondary font-semibold" style={{ fontFamily: 'var(--font-mono)' }}>
+              ${fmtStrike(lower)}–${fmtStrike(higher)}
             </span>
+          </span>
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded-[4px] font-semibold"
+            style={{
+              background: priceInRange ? 'rgba(52,168,119,0.16)' : 'rgba(255,255,255,0.05)',
+              color: priceInRange ? '#34a877' : 'var(--color-text-quaternary)',
+            }}
+          >
+            {priceInRange ? 'IN RANGE' : 'OUT'}
           </span>
         </div>
 
-        {/* Zone bar */}
+        {/* Strike ladder — segments coloured by SVI probability */}
         <div className="select-none">
-          {/* price marker label */}
           <div className="relative h-5">
             <motion.div
               className="absolute -translate-x-1/2 flex flex-col items-center"
@@ -171,29 +261,35 @@ export default function RangeTrading({ currentPrice = 55.4, oracleId = '', onSub
             >
               <span
                 className="px-1 rounded-[3px] text-[10px] font-bold text-white whitespace-nowrap"
-                style={{ background: '#19181f', border: '1px solid var(--color-border-default)', fontFamily: 'var(--font-mono)' }}
+                style={{ background: '#0b9981', fontFamily: 'var(--font-mono)' }}
               >
-                ${price.toFixed(2)}
+                ${fmtStrike(price)}
               </span>
             </motion.div>
           </div>
 
-          {/* segments */}
-          <div className="relative flex gap-[2px] h-8">
-            {zones.map((z) => {
-              const isSel = selected(z.idx)
-              const col = CATEGORIES[z.cat].color
+          <div
+            ref={barRef}
+            className="relative flex gap-[2px] h-8"
+            title="Scroll to zoom the range"
+            onPointerLeave={() => setHover(null)}
+          >
+            {bands.map((band) => {
+              const isSel = selected(band)
+              const t = Math.min(1, bandProb(band) / maxBandProb)
               return (
                 <button
-                  key={z.idx}
-                  onPointerDown={() => onZoneDown(z.idx)}
-                  onPointerEnter={() => onZoneEnter(z.idx)}
+                  key={band.idx}
+                  onPointerDown={() => onDown(band)}
+                  onPointerEnter={() => {
+                    onEnter(band)
+                    setHover(band)
+                  }}
                   className="relative h-full rounded-[3px] transition-all"
                   style={{
-                    flexGrow: z.hi - z.lo,
+                    flexGrow: 1,
                     flexBasis: 0,
-                    background: col,
-                    opacity: isSel ? 1 : 0.42,
+                    background: isSel ? 'rgba(128,125,254,0.95)' : heatColor(t, HEAT),
                     outline: isSel ? '1.5px solid rgba(255,255,255,0.85)' : 'none',
                     outlineOffset: -1.5,
                     cursor: 'pointer',
@@ -201,114 +297,139 @@ export default function RangeTrading({ currentPrice = 55.4, oracleId = '', onSub
                 />
               )
             })}
+            {/* zoom readout (scroll the bar to change) */}
+            <span
+              className="absolute top-0.5 right-0.5 px-1 rounded-[3px] text-[8px] font-semibold pointer-events-none"
+              style={{ background: 'rgba(0,0,0,0.35)', color: 'rgba(255,255,255,0.6)', fontFamily: 'var(--font-mono)' }}
+            >
+              {numBands} strikes
+            </span>
 
-            {/* live price line over the bar */}
+            {/* hover tooltip — band range + win probability */}
+            {hover && (
+              <div
+                className="absolute -translate-x-1/2 bottom-full mb-1.5 pointer-events-none z-20 rounded-[6px] border border-border-default bg-surface-card px-2 py-1 shadow-xl whitespace-nowrap"
+                style={{ left: `${pctOf((hover.lower + hover.upper) / 2)}%` }}
+              >
+                <div className="text-[10px] font-semibold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
+                  ${fmtStrike(hover.lower)}–${fmtStrike(hover.upper)}
+                </div>
+                <div className="text-[9px] text-text-tertiary" style={{ fontFamily: 'var(--font-mono)' }}>
+                  {(bandProb(hover) * 100).toFixed(1)}% to land here
+                </div>
+              </div>
+            )}
             <motion.div
               className="absolute top-0 bottom-0 w-px pointer-events-none"
               style={{ background: 'rgba(255,255,255,0.9)' }}
               animate={{ left: `${pctOf(price)}%` }}
               transition={{ type: 'spring', stiffness: 120, damping: 20 }}
             />
+
+            {/* draggable range edge handles */}
+            {([['lo', lower] as const, ['hi', higher] as const]).map(([which, p]) => (
+              <div
+                key={which}
+                onPointerDown={dragHandle(which)}
+                className="absolute top-0 bottom-0 z-10 flex items-center justify-center group"
+                style={{ left: `${pctOf(p)}%`, width: 14, transform: 'translateX(-50%)', cursor: 'ew-resize' }}
+              >
+                <div
+                  className="h-full w-[3px] rounded-full transition-transform group-hover:scale-x-150"
+                  style={{ background: '#807dfe', boxShadow: '0 0 6px rgba(128,125,254,0.7)' }}
+                />
+                <div
+                  className="absolute w-2.5 h-2.5 rounded-full border-2"
+                  style={{ background: 'var(--color-surface-primary)', borderColor: '#807dfe' }}
+                />
+              </div>
+            ))}
           </div>
 
-          {/* axis ticks at zone boundaries */}
+          {/* strike ticks */}
           <div className="relative h-4 mt-1">
-            {zones.map((z) => (
+            {strikes.filter((_, i) => i % 2 === 0).map((p) => (
               <span
-                key={z.idx}
+                key={p}
                 className="absolute -translate-x-1/2 text-[9px] text-text-quaternary"
-                style={{ left: `${pctOf(z.lo)}%`, fontFamily: 'var(--font-mono)' }}
+                style={{ left: `${pctOf(p)}%`, fontFamily: 'var(--font-mono)' }}
               >
-                ${z.lo.toFixed(0)}
+                ${fmtStrike(p)}
               </span>
             ))}
-            <span
-              className="absolute -translate-x-1/2 text-[9px] text-text-quaternary"
-              style={{ left: '100%', fontFamily: 'var(--font-mono)' }}
-            >
-              ${domainHi.toFixed(0)}
+          </div>
+        </div>
+
+        {/* Market — oracle + expiry are fixed by the selected market (GET /oracles) */}
+        <div className="flex items-center justify-between rounded-[7px] px-2.5 py-2 bg-surface-card border border-border-subtle">
+          <div className="flex flex-col">
+            <span className="text-[10px] uppercase tracking-wider text-text-quaternary">Market</span>
+            <span className="text-[12px] font-semibold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
+              {underlying} · {new Date(expiry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          </div>
+          <div className="flex flex-col items-end">
+            <span className="text-[10px] uppercase tracking-wider text-text-quaternary">Expires in</span>
+            <span className="text-[12px] font-semibold" style={{ fontFamily: 'var(--font-mono)', color: secsToExpiry < 60 ? '#f23546' : '#a6a3ff' }}>
+              {mmss}
             </span>
           </div>
         </div>
 
-        {/* Legend */}
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {(Object.keys(CATEGORIES) as Category[]).map((c) => (
-            <span key={c} className="flex items-center gap-1 text-[10px] text-text-tertiary">
-              <span className="w-2.5 h-2.5 rounded-[2px]" style={{ background: CATEGORIES[c].color }} />
-              {CATEGORIES[c].label}
-            </span>
-          ))}
-        </div>
-
-        {/* Selected range chip */}
-        <div
-          className="flex items-center justify-between rounded-[7px] px-2.5 py-2"
-          style={{ background: 'var(--color-surface-card)', border: '1px solid var(--color-border-subtle)' }}
-        >
-          <span className="text-[10px] uppercase tracking-wider text-text-quaternary">Your range</span>
-          <span className="flex items-center gap-2">
-            <span className="text-[12px] font-semibold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-              ${lower.toFixed(0)} – ${higher.toFixed(0)}
-            </span>
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded-[4px] font-medium"
-              style={{
-                background: priceInRange ? 'rgba(52,168,119,0.16)' : 'rgba(255,255,255,0.05)',
-                color: priceInRange ? '#34a877' : 'var(--color-text-quaternary)',
-              }}
-            >
-              {priceInRange ? 'IN RANGE' : 'OUT'}
-            </span>
-          </span>
-        </div>
-
-        {/* Expiry */}
+        {/* Bet amount */}
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium text-text-quaternary uppercase tracking-widest">Expiry</span>
-          <div className="flex gap-1">
-            {EXPIRY_OPTIONS.map((opt, i) => (
+          <span className="text-[10px] font-medium text-text-quaternary uppercase tracking-widest">You bet</span>
+          <CompactInput value={amountRaw} onChange={setAmount} prefix="$" placeholder="25" />
+          <div className="flex gap-1 mt-0.5">
+            {[10, 25, 50, 100].map((v) => (
               <button
-                key={opt.label}
-                onClick={() => setExpiryIdx(i)}
+                key={v}
+                onClick={() => setAmount(String(v))}
                 className="flex-1 py-1 rounded-[5px] text-[11px] font-medium transition-colors"
                 style={{
-                  background: expiryIdx === i ? 'var(--color-surface-hover)' : 'var(--color-surface-card)',
-                  color: expiryIdx === i ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
-                  border: `1px solid ${expiryIdx === i ? 'var(--color-border-default)' : 'var(--color-border-subtle)'}`,
+                  background: amount === v ? 'var(--color-surface-hover)' : 'var(--color-surface-card)',
+                  color: amount === v ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+                  border: `1px solid ${amount === v ? 'var(--color-border-default)' : 'var(--color-border-subtle)'}`,
                 }}
               >
-                {opt.label}
+                ${v}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Qty + Max cost */}
-        <div className="flex gap-2">
-          <div className="flex flex-col gap-1 flex-1">
-            <span className="text-[10px] font-medium text-text-quaternary uppercase tracking-widest">Qty</span>
-            <CompactInput value={qty} onChange={setQty} suffix="x" placeholder="1" />
-          </div>
-          <div className="flex flex-col gap-1 flex-1">
-            <span className="text-[10px] font-medium text-text-quaternary uppercase tracking-widest">Max cost</span>
-            <CompactInput value={maxCostRaw} onChange={setMaxCost} prefix="$" placeholder="0.00" />
-          </div>
-        </div>
-
-        {/* Summary */}
+        {/* Bet → win summary */}
         <AnimatePresence>
-          {qtyNum > 0 && (
+          {amount > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 3 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="rounded-[7px] border border-border-subtle bg-surface-card px-2.5 py-2 flex flex-col gap-1"
+              className="rounded-[8px] border border-border-subtle bg-surface-card px-3 py-2.5 flex flex-col gap-2"
             >
-              <SummaryRow label="Win prob" value={`~${(prob * 100).toFixed(0)}%`} />
-              <SummaryRow label="Est. cost" value={`~$${estCost.toFixed(3)}`} />
-              <SummaryRow label="Max payout" value={`$${qtyNum.toFixed(2)}`} accent />
-              <SummaryRow label="Profit" value={`~$${profit.toFixed(3)}`} accent />
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase tracking-wider text-text-quaternary">Bet</span>
+                  <span className="text-[16px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
+                    ${amount.toFixed(2)}
+                  </span>
+                </div>
+                <span className="text-[18px] text-text-quaternary">→</span>
+                <div className="flex flex-col items-end">
+                  <span className="text-[10px] uppercase tracking-wider text-text-quaternary">To win</span>
+                  <span className="text-[16px] font-bold" style={{ fontFamily: 'var(--font-mono)', color: '#0b9981' }}>
+                    ${maxPayout.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between border-t border-border-subtle pt-1.5">
+                <span className="text-[10px] text-text-tertiary">
+                  Win prob (SVI) <span className="text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>~{(winProb * 100).toFixed(0)}%</span>
+                </span>
+                <span className="text-[11px] font-semibold" style={{ fontFamily: 'var(--font-mono)', color: '#807dfe' }}>
+                  {multiple.toFixed(2)}× payout
+                </span>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -324,7 +445,7 @@ export default function RangeTrading({ currentPrice = 55.4, oracleId = '', onSub
             cursor: canSubmit ? 'pointer' : 'not-allowed',
           }}
         >
-          Enter Range · ${lower.toFixed(0)}–${higher.toFixed(0)}
+          Mint Range · ${fmtStrike(lower)}–${fmtStrike(higher)}
         </button>
       </div>
     </div>
@@ -349,17 +470,6 @@ function CompactInput({ value, onChange, prefix, suffix, placeholder }: {
         style={{ fontFamily: 'var(--font-mono)' }}
       />
       {suffix && <span className="text-text-quaternary text-[11px]">{suffix}</span>}
-    </div>
-  )
-}
-
-function SummaryRow({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-[10px] text-text-tertiary">{label}</span>
-      <span className="text-[11px] font-medium" style={{ fontFamily: 'var(--font-mono)', color: accent ? 'var(--color-text-primary)' : 'var(--color-text-secondary)' }}>
-        {value}
-      </span>
     </div>
   )
 }
