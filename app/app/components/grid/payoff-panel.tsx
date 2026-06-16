@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconX } from '@tabler/icons-react';
 import type { GridState } from './use-grid-state';
+import { pnlAtPrice } from './payoff';
 
 function useSize() {
   const ref = useRef<HTMLDivElement>(null);
@@ -20,7 +21,7 @@ function useSize() {
 function PayoffDiagram({ s }: { s: GridState }) {
   const { ref, w, h } = useSize();
   const pts = s.payoffPoints;
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hoverPrice, setHoverPrice] = useState<number | null>(null);
 
   if (pts.length === 0) {
     return (
@@ -54,7 +55,8 @@ function PayoffDiagram({ s }: { s: GridState }) {
     PAD + ((yMax - pnl) / (yMax - yMin || 1)) * plotH;
 
   const zeroY = yOf(0);
-  const hoverPt = hoverIdx == null ? null : pts[hoverIdx] ?? null;
+  const hoverPnl = hoverPrice == null ? null : pnlAtPrice(s.legsArr, hoverPrice);
+  const hoverPt = hoverPrice == null || hoverPnl == null ? null : { price: hoverPrice, pnl: hoverPnl };
 
   // Build the step area split at the zero line for green/red fills.
   const linePath = pts
@@ -80,17 +82,16 @@ function PayoffDiagram({ s }: { s: GridState }) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const frac = Math.max(0, Math.min(1, x / rect.width));
-    const idx = Math.max(0, Math.min(pts.length - 1, Math.round(frac * (pts.length - 1))));
-    setHoverIdx(idx);
+    setHoverPrice(pMin + frac * (pMax - pMin));
   };
 
   return (
-    <div ref={ref} className="h-full w-full">
+    <div ref={ref} className="relative h-full w-full">
       <svg
         width={w}
         height={h}
         onPointerMove={handleMove}
-        onPointerLeave={() => setHoverIdx(null)}
+        onPointerLeave={() => setHoverPrice(null)}
         className="cursor-crosshair"
       >
         <path d={areaPos} fill="rgba(11,153,129,0.18)" />
@@ -123,7 +124,7 @@ function PayoffDiagram({ s }: { s: GridState }) {
         {/* payoff step line */}
         <path d={linePath} fill="none" stroke="#807dfe" strokeWidth={1.75} />
 
-        {/* hover crosshair + tooltip */}
+        {/* hover crosshair + point */}
         {hoverPt && (
           <>
             <line
@@ -136,27 +137,6 @@ function PayoffDiagram({ s }: { s: GridState }) {
               strokeDasharray="3 3"
             />
             <circle cx={xOf(hoverPt.price)} cy={yOf(hoverPt.pnl)} r={4} fill="#807dfe" />
-            <g transform={`translate(${xOf(hoverPt.price)}, ${Math.max(PAD + 8, yOf(hoverPt.pnl) - 10)})`}>
-              <rect
-                x={-46}
-                y={-26}
-                width={92}
-                height={22}
-                rx={6}
-                fill="rgba(8,10,18,0.96)"
-                stroke="rgba(255,255,255,0.16)"
-              />
-              <text
-                x={0}
-                y={-12}
-                fill="#fff"
-                fontSize={9}
-                textAnchor="middle"
-                style={{ fontFamily: 'var(--font-mono)' }}
-              >
-                ${hoverPt.price.toFixed(0)} · {hoverPt.pnl >= 0 ? '+' : '-'}${Math.abs(hoverPt.pnl).toFixed(0)}
-              </text>
-            </g>
           </>
         )}
 
@@ -188,6 +168,36 @@ function PayoffDiagram({ s }: { s: GridState }) {
           </text>
         ))}
       </svg>
+
+      {hoverPt && (
+        <div
+          className="pointer-events-none absolute z-20 rounded-[6px] border border-border-default bg-[rgba(8,10,18,0.96)] px-2 py-1.5 shadow-2xl"
+          style={{
+            left: Math.min(Math.max(xOf(hoverPt.price) - 56, 12), w - 112),
+            top: Math.max(12, yOf(hoverPt.pnl) - 6),
+            width: 112,
+          }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] uppercase tracking-wider text-text-quaternary">Hover</span>
+            <span className="text-[10px] font-semibold" style={{ fontFamily: 'var(--font-mono)' }}>
+              ${hoverPt.price.toFixed(0)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 mt-0.5">
+            <span className="text-[9px] text-text-tertiary">PnL</span>
+            <span
+              className="text-[10px] font-semibold"
+              style={{
+                fontFamily: 'var(--font-mono)',
+                color: hoverPt.pnl >= 0 ? '#0b9981' : '#f23546',
+              }}
+            >
+              {hoverPt.pnl >= 0 ? '+' : '−'}${Math.abs(hoverPt.pnl).toFixed(2)}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
