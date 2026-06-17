@@ -44,6 +44,9 @@ coverage/
 vite.svg
 *.tsbuildinfo
 
+### Rust
+target/
+
 ### Misc
 tmp/
 temp/

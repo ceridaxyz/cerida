@@ -1,0 +1,15 @@
+[package]
+name = "cerida-keeper"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cerida-core = { path = "../cerida-core" }
+redis.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
