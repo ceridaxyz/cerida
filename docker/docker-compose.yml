@@ -26,8 +26,47 @@ volumes:
       # Cap the in-memory store so a long-running localnet can't balloon
       # unbounded (RAM -> Docker VM disk) and starve the host disk.
       o: size=3g
+  timescale_data:
+  redis_data:
 
 services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: cerida-timescaledb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cerida}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    networks:
+      - cerida-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-cerida}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cerida-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cerida-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
   sui-localnet:
     # Must be a sui-tools image new enough to run predict-testnet-4-16's
     # [environments] manifest format (>= ~1.65). Default targets 1.73.1.
@@ -72,3 +111,77 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  cerida-api:
+    build:
+      context: ..
+      dockerfile: crates/Dockerfile
+    container_name: cerida-api
+    command: ["cerida-api"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@timescaledb:5432/cerida}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      PREDICT_BASE: ${PREDICT_BASE:-https://predict-server.testnet.mystenlabs.com}
+      SUI_RPC_URL: ${SUI_RPC_URL:-http://sui-localnet:9000}
+      CERIDA_PACKAGE_ID: ${CERIDA_PACKAGE_ID:-}
+      API_HOST: 0.0.0.0
+      API_PORT: 8788
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "8788:8788"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cerida-net
+    restart: unless-stopped
+
+  cerida-indexer:
+    build:
+      context: ..
+      dockerfile: crates/Dockerfile
+    container_name: cerida-indexer
+    command: ["cerida-indexer"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@timescaledb:5432/cerida}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      PREDICT_BASE: ${PREDICT_BASE:-https://predict-server.testnet.mystenlabs.com}
+      SUI_RPC_URL: ${SUI_RPC_URL:-http://sui-localnet:9000}
+      CERIDA_PACKAGE_ID: ${CERIDA_PACKAGE_ID:-}
+      POLL_MS: ${POLL_MS:-3000}
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sui-localnet:
+        condition: service_healthy
+    networks:
+      - cerida-net
+    restart: unless-stopped
+
+  cerida-keeper:
+    build:
+      context: ..
+      dockerfile: crates/Dockerfile
+    container_name: cerida-keeper
+    command: ["cerida-keeper"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@timescaledb:5432/cerida}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      SUI_RPC_URL: ${SUI_RPC_URL:-http://sui-localnet:9000}
+      KEEPER_DRY_RUN: ${KEEPER_DRY_RUN:-true}
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sui-localnet:
+        condition: service_healthy
+    networks:
+      - cerida-net
+    restart: unless-stopped
