@@ -7,6 +7,7 @@ export type CellState =
   | 'selected'
   | 'active'
   | 'won'
+  | 'claimable' // settled winner you hold — call claim_window_bet
   | 'lost'
   | 'expired';
 

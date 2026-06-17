@@ -40,6 +40,11 @@ export default function OrderSummary({ s }: { s: GridState }) {
   const [slipOpen, setSlipOpen] = useState(false);
   const [slip, setSlip] = useState('1.0');
   const [legsOpen, setLegsOpen] = useState(false);
+  // Manual stake per band ($ you pay for each leg). Win → stake × multiplier.
+  // Global (in GridState) so it reprices cells, payoff and analytics too.
+  const stake = s.stake;
+  const stakeRaw = String(stake);
+  const setStake = (v: string) => s.setStake(Math.max(0, parseFloat(v) || 0));
 
   const a = computeAnalytics(s);
   const hasLegs = legsArr.length > 0;
@@ -49,6 +54,7 @@ export default function OrderSummary({ s }: { s: GridState }) {
       : '—';
 
   // Group legs by band range so a 25-leg basket collapses to a few rows.
+  // Cost/payout use the manual stake: each leg costs `stake`, wins stake×mult.
   const grouped = new Map<
     string,
     { lower: number; upper: number; count: number; cost: number; payout: number }
@@ -58,11 +64,14 @@ export default function OrderSummary({ s }: { s: GridState }) {
     const g =
       grouped.get(k) ?? { lower: l.lower, upper: l.upper, count: 0, cost: 0, payout: 0 };
     g.count += 1;
-    g.cost += l.cost;
-    g.payout += l.cost * l.multiplier;
+    g.cost += stake;
+    g.payout += stake * l.multiplier;
     grouped.set(k, g);
   }
   const groups = [...grouped.values()].sort((x, y) => y.lower - x.lower);
+  const totalCost = stake * legsArr.length;
+  // Best-case payout: one band wins per epoch → the richest band's stake×mult.
+  const bestPayout = legsArr.reduce((m, l) => Math.max(m, stake * l.multiplier), 0);
 
   return (
     <div className="flex flex-col h-full text-[11px]">
@@ -74,6 +83,38 @@ export default function OrderSummary({ s }: { s: GridState }) {
       </div>
 
       <div className="flex flex-col gap-2 px-3 py-2.5 flex-1 overflow-auto">
+        {/* manual stake per band */}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-text-quaternary">Stake / band</span>
+          <div className="flex items-center bg-surface-card rounded-[6px] px-2 py-1 border border-border-subtle gap-1 w-24">
+            <span className="text-text-quaternary text-[11px]">$</span>
+            <input
+              type="number"
+              min={0}
+              value={stakeRaw}
+              onChange={(e) => setStake(e.target.value)}
+              className="flex-1 bg-transparent text-[12px] font-medium text-text-primary outline-none w-0"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+        </div>
+        <div className="flex gap-1">
+          {[5, 10, 25, 50].map((v) => (
+            <button
+              key={v}
+              onClick={() => setStake(String(v))}
+              className="flex-1 py-1 rounded-[5px] text-[10px] font-medium transition-colors"
+              style={{
+                background: stake === v ? 'var(--color-surface-hover)' : 'var(--color-surface-card)',
+                color: stake === v ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+                border: `1px solid ${stake === v ? 'var(--color-border-default)' : 'var(--color-border-subtle)'}`,
+              }}
+            >
+              ${v}
+            </button>
+          ))}
+        </div>
+
         {/* prominent EV + win probability */}
         {hasLegs && (
           <div className="grid grid-cols-2 gap-2 mb-1">
@@ -95,14 +136,9 @@ export default function OrderSummary({ s }: { s: GridState }) {
           </div>
         )}
 
-        <Stat label="Total cost" value={`$${stats.totalCost.toFixed(2)}`} />
-        <Stat
-          label="Max profit"
-          value={`$${stats.maxProfit.toFixed(2)}`}
-          sub={hasLegs ? `+${stats.maxProfitPct.toFixed(0)}%` : undefined}
-          color="#0b9981"
-        />
-        <Stat label="Max loss" value={`-$${Math.abs(stats.maxLoss).toFixed(2)}`} color="#f23546" />
+        <Stat label="Total cost" value={`$${totalCost.toFixed(2)}`} />
+        <Stat label="Best payout" value={`$${bestPayout.toFixed(2)}`} color="#0b9981" />
+        <Stat label="Max loss" value={`-$${totalCost.toFixed(2)}`} color="#f23546" />
         <Stat label="Breakeven" value={breakevenStr} />
 
         {/* slippage (collapsible) */}
@@ -164,7 +200,7 @@ export default function OrderSummary({ s }: { s: GridState }) {
                   <div key={l.key} className="flex items-center justify-between text-[9px] text-text-quaternary">
                     <span style={{ fontFamily: 'var(--font-mono)' }}>${l.lower}–{l.upper}</span>
                     <span style={{ fontFamily: 'var(--font-mono)' }}>
-                      ${l.cost.toFixed(2)} → ${(l.cost * l.multiplier).toFixed(2)}
+                      ${stake.toFixed(2)} → ${(stake * l.multiplier).toFixed(2)}
                     </span>
                   </div>
                 ))}

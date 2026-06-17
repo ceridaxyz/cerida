@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import ReactGridLayout, {
   type Layout,
   type LayoutItem,
@@ -43,7 +44,6 @@ function useGridSize() {
 
 // ── Lazy widgets ───────────────────────────────────────────────────────────────
 
-const OrderBook = lazy(() => import('../../components/market/order-book'));
 const BottomTabs = lazy(() => import('../../components/market/bottom-tabs'));
 const TradingPanel = lazy(
   () => import('../../components/market/trading-panel'),
@@ -51,6 +51,12 @@ const TradingPanel = lazy(
 const RangeTrading = lazy(
   () => import('../../components/trading/range-trading'),
 );
+const PriceChart = lazy(() => import('../../components/market/price-chart'));
+const CryptoPrice = lazy(() => import('../../components/market/crypto-price'));
+const IvTermStructure = lazy(
+  () => import('../../components/market/iv-term-structure'),
+);
+const OptionsFlow = lazy(() => import('../../components/market/options-flow'));
 
 // ── Skeletons ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +96,15 @@ const BottomTabsSkeleton = () => (
 // ── Widget catalog ───────────────────────────────────────────────────────────
 // Every available widget type, its default footprint, and its content.
 
-type WidgetType = 'chart' | 'book' | 'trade' | 'range' | 'positions' | 'panel';
+type WidgetType =
+  | 'chart'
+  | 'crypto'
+  | 'flow'
+  | 'iv'
+  | 'trade'
+  | 'range'
+  | 'positions'
+  | 'panel';
 
 interface WidgetSpec {
   label: string;
@@ -109,17 +123,45 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
     h: 8,
     minW: 4,
     minH: 3,
-    render: () => null,
+    render: () => (
+      <Suspense fallback={<TradeSkeleton />}>
+        <PriceChart />
+      </Suspense>
+    ),
   },
-  book: {
-    label: 'Order Book',
+  crypto: {
+    label: 'Crypto Price',
     w: 6,
     h: 8,
     minW: 3,
     minH: 3,
     render: () => (
+      <Suspense fallback={<TradeSkeleton />}>
+        <CryptoPrice />
+      </Suspense>
+    ),
+  },
+  flow: {
+    label: 'Flow',
+    w: 6,
+    h: 8,
+    minW: 4,
+    minH: 4,
+    render: () => (
       <Suspense fallback={<OrderBookSkeleton />}>
-        <OrderBook />
+        <OptionsFlow />
+      </Suspense>
+    ),
+  },
+  iv: {
+    label: 'IV Surface',
+    w: 15,
+    h: 4,
+    minW: 6,
+    minH: 3,
+    render: () => (
+      <Suspense fallback={<OrderBookSkeleton />}>
+        <IvTermStructure />
       </Suspense>
     ),
   },
@@ -202,84 +244,68 @@ const CloseIcon = () => <IconX size={10} stroke={2.5} />;
 const PlusIcon = () => <IconPlus size={12} stroke={2.5} />;
 
 function Widget({
-  title,
-  children,
-  tabbed = true,
+  tabs,
+  active,
+  options,
+  content,
+  onSelect,
+  onAddTab,
+  onCloseTab,
   onClose,
 }: {
-  title: string;
-  children?: React.ReactNode;
-  tabbed?: boolean;
+  tabs: { id: string; label: string }[];
+  active: number;
+  options: { type: string; label: string }[];
+  content: React.ReactNode;
+  onSelect: (i: number) => void;
+  onAddTab: (type: string) => void;
+  onCloseTab: (i: number) => void;
   onClose?: () => void;
 }) {
-  const [tabs, setTabs] = useState<string[]>([title]);
-  const [active, setActive] = useState(0);
-
-  const addTab = () => {
-    setTabs((t) => [...t, `${title} ${t.length + 1}`]);
-    setActive(tabs.length);
-  };
-
-  const closeTab = (i: number) => {
-    if (tabs.length === 1) return;
-    setTabs((t) => t.filter((_, idx) => idx !== i));
-    setActive((a) => (a >= i && a > 0 ? a - 1 : a));
-  };
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   return (
     <div className="panel-widget rounded-[18px] overflow-hidden bg-surface-primary border border-border-subtle h-full flex flex-col">
-      <div className="widget-handle flex items-center gap-1 px-2 h-9 shrink-0 border-b border-border-subtle cursor-grab active:cursor-grabbing select-none overflow-hidden">
-        {!tabbed ? (
-          <span className="px-2 text-[11px] font-medium text-text-quaternary uppercase tracking-widest whitespace-nowrap">
-            {title}
-          </span>
-        ) : (
-          <>
-            <div className="flex items-center gap-1 min-w-0 overflow-hidden">
-              {tabs.map((tab, i) => (
-                <button
-                  key={i}
-                  onClick={() => setActive(i)}
-                  className={`flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] font-medium uppercase tracking-widest transition-colors whitespace-nowrap shrink-0 ${
-                    active === i
-                      ? 'bg-surface-card text-text-primary'
-                      : 'text-text-quaternary hover:text-text-secondary'
-                  }`}
-                >
-                  <span className="truncate max-w-24">{tab}</span>
-                  {active === i && tabs.length > 1 && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        closeTab(i);
-                      }}
-                      className="text-text-quaternary hover:text-text-primary shrink-0"
-                    >
-                      <CloseIcon />
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-
+      <div className="widget-handle flex items-center gap-1 px-2 h-9 shrink-0 border-b border-border-subtle cursor-grab active:cursor-grabbing select-none">
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto no-scrollbar">
+          {tabs.map((tab, i) => (
             <button
-              onClick={addTab}
-              className="flex items-center justify-center w-6 h-6 rounded-[6px] text-text-quaternary hover:text-text-primary hover:bg-surface-card transition-colors shrink-0"
+              key={tab.id}
+              onClick={() => onSelect(i)}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] font-medium uppercase tracking-widest transition-colors whitespace-nowrap shrink-0 ${
+                active === i
+                  ? 'bg-surface-card text-text-primary'
+                  : 'text-text-quaternary hover:text-text-secondary'
+              }`}
             >
-              <PlusIcon />
+              <span className="truncate max-w-28">{tab.label}</span>
+              {active === i && tabs.length > 1 && (
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseTab(i);
+                  }}
+                  className="text-text-quaternary hover:text-text-primary shrink-0"
+                >
+                  <CloseIcon />
+                </span>
+              )}
             </button>
-          </>
-        )}
+          ))}
+
+          <button
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu(menu ? null : { x: r.left, y: r.bottom + 4 });
+            }}
+            className="flex items-center justify-center w-6 h-6 rounded-[6px] text-text-quaternary hover:text-text-primary hover:bg-surface-card transition-colors shrink-0"
+            title="Add tab"
+          >
+            <PlusIcon />
+          </button>
+        </div>
 
         <div className="flex items-center gap-1 ml-auto shrink-0">
-          <div className="hidden sm:flex gap-0.75 items-center opacity-30">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="w-0.75 h-0.75 rounded-full bg-text-tertiary"
-              />
-            ))}
-          </div>
           {onClose && (
             <button
               onClick={onClose}
@@ -291,44 +317,78 @@ function Widget({
           )}
         </div>
       </div>
-      <div className="flex-1 overflow-hidden min-h-0">
-        {active === 0 ? (
-          children
-        ) : (
-          <div className="flex items-center justify-center h-full text-[11px] text-text-quaternary uppercase tracking-widest">
-            Empty setup
-          </div>
+
+      <div className="flex-1 overflow-hidden min-h-0">{content}</div>
+
+      {/* type picker — portalled to body so the grid item's transform/overflow
+          doesn't clip it */}
+      {menu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-[60]" onClick={() => setMenu(null)} />
+            <div
+              className="fixed z-[61] min-w-36 rounded-[10px] border border-border-subtle bg-surface-card shadow-xl py-1"
+              style={{ left: menu.x, top: menu.y }}
+            >
+              <div className="px-3 py-1 text-[9px] uppercase tracking-widest text-text-quaternary">
+                Add tab
+              </div>
+              {options.map((o) => (
+                <button
+                  key={o.type}
+                  onClick={() => {
+                    onAddTab(o.type);
+                    setMenu(null);
+                  }}
+                  className="block w-full text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </>,
+          document.body,
         )}
-      </div>
     </div>
   );
 }
 
 // ── Initial board ──────────────────────────────────────────────────────────────
 
-interface Item {
+interface Tab {
   id: string;
   type: WidgetType;
 }
+interface Item {
+  id: string;
+  tabs: Tab[];
+  active: number;
+}
+
+// One widget per board item to start; each can grow tabs of any type.
+const one = (id: string, type: WidgetType): Item => ({
+  id,
+  tabs: [{ id: `${id}-t0`, type }],
+  active: 0,
+});
 
 const INITIAL_ITEMS: Item[] = [
-  { id: 'panel-top', type: 'panel' },
-  { id: 'panel-bottom', type: 'panel' },
-  { id: 'chart', type: 'chart' },
-  { id: 'book', type: 'book' },
-  { id: 'trade', type: 'trade' },
-  { id: 'range', type: 'range' },
-  { id: 'positions', type: 'positions' },
+  one('crypto', 'crypto'),
+  one('chart', 'chart'),
+  one('flow', 'flow'),
+  one('trade', 'trade'),
+  one('range', 'range'),
+  one('iv', 'iv'),
 ];
 
 const INITIAL_LAYOUT: Layout = [
-  { i: 'panel-top', x: 0, y: 0, w: 4, h: 6, minW: 2, minH: 3 },
-  { i: 'panel-bottom', x: 0, y: 6, w: 4, h: 6, minW: 2, minH: 3 },
+  { i: 'crypto', x: 0, y: 0, w: 4, h: 6, minW: 3, minH: 3 },
   { i: 'chart', x: 4, y: 0, w: 9, h: 8, minW: 4, minH: 3 },
-  { i: 'book', x: 13, y: 0, w: 6, h: 8, minW: 3, minH: 3 },
+  { i: 'flow', x: 13, y: 0, w: 6, h: 8, minW: 4, minH: 4 },
   { i: 'trade', x: 19, y: 0, w: 5, h: 6, minW: 4, minH: 3 },
   { i: 'range', x: 19, y: 5, w: 5, h: 6, minW: 4, minH: 5 },
-  { i: 'positions', x: 4, y: 8, w: 15, h: 4, minW: 4, minH: 2 },
+  { i: 'iv', x: 4, y: 8, w: 15, h: 4, minW: 6, minH: 3 },
 ];
 
 // ── Page ───────────────────────────────────────────────────────────────────────
@@ -361,13 +421,40 @@ const TradePage = () => {
         { i: id, x, y, w: spec.w, h: spec.h, minW: spec.minW, minH: spec.minH },
       ];
     });
-    setItems((prev) => [...prev, { id, type }]);
+    setItems((prev) => [...prev, one(id, type)]);
   };
 
   const removeWidget = (id: string) => {
     setItems((prev) => prev.filter((it) => it.id !== id));
     setLayout((prev) => prev.filter((l) => l.i !== id));
   };
+
+  // ── Tab ops (any widget type per tab) ──────────────────────────────────────
+  const selectTab = (itemId: string, i: number) =>
+    setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, active: i } : it)));
+
+  const addTab = (itemId: string, type: WidgetType) =>
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === itemId
+          ? {
+              ...it,
+              tabs: [...it.tabs, { id: `t${++nextId.current}`, type }],
+              active: it.tabs.length,
+            }
+          : it,
+      ),
+    );
+
+  const closeTab = (itemId: string, i: number) =>
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== itemId || it.tabs.length === 1) return it;
+        const tabs = it.tabs.filter((_, idx) => idx !== i);
+        const active = i < it.active || it.active > tabs.length - 1 ? Math.max(0, it.active - 1) : it.active;
+        return { ...it, tabs, active };
+      }),
+    );
 
   return (
     <div className="flex h-screen overflow-hidden bg-page">
@@ -397,16 +484,19 @@ const TradePage = () => {
             useCSSTransforms
           >
             {items.map((item) => {
-              const spec = CATALOG[item.type];
+              const activeTab = item.tabs[item.active] ?? item.tabs[0]!;
               return (
                 <div key={item.id} className="h-full">
                   <Widget
-                    title={spec.label}
-                    tabbed={spec.tabbed ?? true}
+                    tabs={item.tabs.map((t) => ({ id: t.id, label: CATALOG[t.type].label }))}
+                    active={item.active}
+                    options={ADD_OPTIONS}
+                    content={CATALOG[activeTab.type].render()}
+                    onSelect={(i) => selectTab(item.id, i)}
+                    onAddTab={(t) => addTab(item.id, t as WidgetType)}
+                    onCloseTab={(i) => closeTab(item.id, i)}
                     onClose={() => removeWidget(item.id)}
-                  >
-                    {spec.render()}
-                  </Widget>
+                  />
                 </div>
               );
             })}

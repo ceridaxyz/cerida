@@ -41,6 +41,7 @@ const cellColors = {
   selected: { bg: 'rgba(128,125,254,0.22)', border: '#807dfe', opacity: 1 },
   active: { bg: 'rgba(11,153,129,0.16)', border: '#0b9981', opacity: 1 },
   won: { bg: 'rgba(11,153,129,0.5)', border: '#0b9981', opacity: 1 },
+  claimable: { bg: 'rgba(245,193,66,0.4)', border: '#f5c142', opacity: 1 },
   lost: { bg: 'rgba(242,53,70,0.12)', border: 'rgba(242,53,70,0.35)', opacity: 0.55 },
   expired: { bg: 'rgba(255,255,255,0.02)', border: 'rgba(255,255,255,0.04)', opacity: 0.5 },
 } as const;
@@ -102,19 +103,36 @@ export default function GridChart({ s }: { s: GridState }) {
   const plotW = Math.max(1, w - PAD_L - PAD_R);
   const plotH = Math.max(1, h - PAD_T - PAD_B);
 
-  // Sliding price viewport anchored on the live price: the price line stays
-  // pinned at vertical centre and the strike boxes scroll up/down through it.
-  const strikeStep = (s.strikes[1] ?? 0) - (s.strikes[0] ?? 0) || 1;
-  const PRICE_HALF = 7 * strikeStep; // ~14 bands tall
-  const priceMin = s.price - PRICE_HALF;
-  const priceMax = s.price + PRICE_HALF;
-  const span = priceMax - priceMin || 1;
+  // Uniform-row y-axis: map by BAND INDEX, not price, so every cell is the same
+  // height despite equal-probability (unequal-width) bands. The price axis labels
+  // carry the non-uniform spacing instead. Price line stays pinned at centre.
+  const strikeStep = (s.strikes[1] ?? 0) - (s.strikes[0] ?? 0) || 1; // edge-mode scale only
+  const VIS_BANDS = 14; // rows visible at once
+  const lastStrike = s.strikes.length - 1;
+  // Continuous band coordinate for any price (interpolates within its band).
+  const bandCoordOf = (price: number): number => {
+    if (price <= s.strikes[0]!) {
+      return (price - s.strikes[0]!) / ((s.strikes[1]! - s.strikes[0]!) || 1);
+    }
+    if (price >= s.strikes[lastStrike]!) {
+      return lastStrike + (price - s.strikes[lastStrike]!) / ((s.strikes[lastStrike]! - s.strikes[lastStrike - 1]!) || 1);
+    }
+    for (let i = 0; i < lastStrike; i++) {
+      const lo = s.strikes[i]!;
+      const hi = s.strikes[i + 1]!;
+      if (price < hi) return i + (price - lo) / (hi - lo);
+    }
+    return lastStrike;
+  };
+  const centerCoord = bandCoordOf(s.price);
+  const coordMin = centerCoord - VIS_BANDS / 2;
+  const coordMax = centerCoord + VIS_BANDS / 2;
+  const coordSpan = coordMax - coordMin || 1;
+  const yOf = (price: number) => PAD_T + ((coordMax - bandCoordOf(price)) / coordSpan) * plotH;
 
-  // Only strikes/bands inside the price window are drawn.
-  const visibleStrikes = s.strikes.filter((p) => p >= priceMin && p <= priceMax);
-  const visibleBands = s.bands.filter(
-    (b) => b.upper >= priceMin && b.lower <= priceMax,
-  );
+  // Only bands/strikes inside the band-index window are drawn.
+  const visibleStrikes = s.strikes.filter((_, i) => i >= coordMin - 1 && i <= coordMax + 1);
+  const visibleBands = s.bands.filter((b) => b.idx >= coordMin - 1 && b.idx <= coordMax + 1);
 
   // Sliding time window anchored on `now`: the "now" marker stays put at a fixed
   // screen x and the columns flow leftward through it as time advances.
@@ -127,7 +145,6 @@ export default function GridChart({ s }: { s: GridState }) {
     (e) => e.end >= winStart && e.start <= winEnd,
   );
 
-  const yOf = (price: number) => PAD_T + ((priceMax - price) / span) * plotH;
   const xOf = (t: number) => PAD_L + ((t - winStart) / tSpan) * plotW;
 
   const nowX = xOf(s.now);
@@ -395,6 +412,10 @@ export default function GridChart({ s }: { s: GridState }) {
             c = { ...base, bg: f.bg, border: f.border };
           }
           const big = cw > 46 && ch > 22;
+          // Font scales with cell size so text fits on zoom/resize instead of
+          // overflowing small cells or looking tiny in large ones.
+          const fs = Math.max(8, Math.min(13, Math.min(cw * 0.125, ch * 0.55)));
+          const fsSub = Math.max(7, fs * 0.82);
           const isFocused = epoch.id === s.focusedEpoch;
           return (
             <div
@@ -444,9 +465,11 @@ export default function GridChart({ s }: { s: GridState }) {
             >
               {big && cell.state === 'available' && (
                 <span
-                  className="text-[10px] font-semibold"
+                  className="font-semibold whitespace-nowrap"
                   style={{
                     fontFamily: 'var(--font-mono)',
+                    fontSize: fs,
+                    lineHeight: 1.1,
                     color:
                       cellMode === 'edge'
                         ? ev >= 0 ? '#19e6bd' : '#f23546'
@@ -460,23 +483,35 @@ export default function GridChart({ s }: { s: GridState }) {
               )}
               {big && cell.state === 'selected' && (
                 <>
-                  <span className="text-[10px] font-bold text-text-primary">{cell.multiplier.toFixed(2)}x</span>
-                  <span className="text-[9px] text-accent-light" style={{ fontFamily: 'var(--font-mono)' }}>
-                    ${cell.cost.toFixed(2)}
+                  <span className="font-bold text-text-primary whitespace-nowrap" style={{ fontSize: fs, lineHeight: 1.1 }}>{cell.multiplier.toFixed(2)}x</span>
+                  <span className="text-accent-light whitespace-nowrap" style={{ fontFamily: 'var(--font-mono)', fontSize: fsSub, lineHeight: 1.1 }}>
+                    ${s.stake.toFixed(0)} → ${(s.stake * cell.multiplier).toFixed(0)}
                   </span>
                 </>
               )}
               {big && cell.state === 'active' && (
                 <span
-                  className="text-[10px] font-bold"
+                  className="font-bold whitespace-nowrap"
                   style={{
                     fontFamily: 'var(--font-mono)',
+                    fontSize: fs,
+                    lineHeight: 1.1,
                     color: (cell.uPnl ?? 0) >= 0 ? '#0b9981' : '#f23546',
                   }}
                 >
                   {(cell.uPnl ?? 0) >= 0 ? '+$' : '−$'}
                   {Math.abs(cell.uPnl ?? 0).toFixed(2)}
                 </span>
+              )}
+              {big && cell.state === 'claimable' && (
+                <>
+                  <span className="font-bold uppercase tracking-wider animate-pulse whitespace-nowrap" style={{ color: '#f5c142', fontSize: fsSub, lineHeight: 1.1 }}>
+                    Claim
+                  </span>
+                  <span className="font-bold whitespace-nowrap" style={{ fontFamily: 'var(--font-mono)', fontSize: fsSub, lineHeight: 1.1, color: '#f5c142' }}>
+                    +${(cell.uPnl ?? 0).toFixed(2)}
+                  </span>
+                </>
               )}
             </div>
           );
