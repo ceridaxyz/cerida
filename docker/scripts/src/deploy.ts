@@ -45,6 +45,29 @@ async function main() {
   const chainId = liveChainId();
   const m = loadManifest();
 
+  // A fresh deploy means a fresh genesis: every object and flag that setup.ts
+  // produced on the previous chain is now dead. setup.ts guards its stateful
+  // steps on these flags (if (!m.minted) … etc.), so leaving them set would
+  // make setup silently SKIP minting dUSDC, creating/activating the oracle, and
+  // supplying — yet still report success, leaving flow.ts to fail with
+  // "no dUSDC". Clear all setup-produced runtime state here so setup re-runs it.
+  for (const k of [
+    'predict',
+    'minted',
+    'supplied',
+    'oracle',
+    'oracleCap',
+    'oracleActivated',
+    'expiry',
+    'dusdcCurrencyShared',
+    'marginPoolId',
+    'leverageBookId',
+    'limitBookId',
+    'leverageSeeded',
+  ] as const) {
+    delete (m as Record<string, unknown>)[k];
+  }
+
   // 1. token (leaf)
   await fund(addr);
   console.log('publishing token…');
@@ -69,7 +92,9 @@ async function main() {
   m.predictPkg = onlyPackage(p.packages);
   m.registry = findCreated(p.created, '::registry::Registry');
   m.adminCap = findCreated(p.created, '::registry::AdminCap');
-  m.plpCap = findCreated(p.created, '::plp::PLP>'); // TreasuryCap<…::plp::PLP>
+  // Match coin::TreasuryCap specifically — PLP also mints a coin_registry
+  // Currency<PLP> (TTO'd to 0xc) whose type also ends in ::plp::PLP>.
+  m.plpCap = findCreated(p.created, 'coin::TreasuryCap<');
   pinPublished(tomlOf(PKG.predict), 'deepbook_predict', m.predictPkg);
   saveManifest(m);
   console.log('  predictPkg =', m.predictPkg);
@@ -80,7 +105,7 @@ async function main() {
   const d = await publish(c, kp, PKG.dusdc);
   m.dusdcPkg = onlyPackage(d.packages);
   m.dusdcType = `${m.dusdcPkg}::dusdc::DUSDC`;
-  m.dusdcCap = findCreated(d.created, '::dusdc::DUSDC>'); // TreasuryCap<…::dusdc::DUSDC>
+  m.dusdcCap = findCreated(d.created, 'coin::TreasuryCap<'); // not Currency<…DUSDC>
   // Currency<DUSDC> is transfer-to-object'd to the CoinRegistry (0xc) by init;
   // setup.ts must finalize_registration to re-share it. Clear any stale shared id.
   m.dusdcCurrency = findCreated(d.created, 'Currency<');

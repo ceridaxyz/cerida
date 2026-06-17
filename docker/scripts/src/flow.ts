@@ -39,6 +39,9 @@ async function exec(
   if (r.effects?.status.status !== 'success') {
     throw new Error(`${label} failed: ${JSON.stringify(r.effects?.status)}`);
   }
+  // Block until the fullnode has indexed this tx so the next tx can reference
+  // objects created here (e.g. the vault) without a read-after-write race.
+  await c.waitForTransaction({ digest: r.digest });
   return r;
 }
 
@@ -60,6 +63,32 @@ async function dusdcCoin(
   return coins.data[0].coinObjectId;
 }
 
+// Push a fresh spot price so the oracle passes assert_live_oracle's 30s
+// staleness check. setup.ts feeds the oracle once, but flow runs minutes later
+// in a separate process; without a re-feed, execute_mint aborts with
+// EOracleStale (oracle_config code 6). In production a feed service does this
+// continuously — here we do it inline right before each price-sensitive call.
+async function refreshOracle(
+  c: SuiClient,
+  kp: Ed25519Keypair,
+  predictPkg: string,
+  oracle: string,
+  oracleCap: string,
+  spotUsd: bigint = 63_000n,
+) {
+  const spot = spotUsd * PRICE_SCALE;
+  const tx = new Transaction();
+  const pd = tx.moveCall({
+    target: `${predictPkg}::oracle::new_price_data`,
+    arguments: [tx.pure.u64(spot), tx.pure.u64(spot)],
+  });
+  tx.moveCall({
+    target: `${predictPkg}::oracle::update_prices`,
+    arguments: [tx.object(oracle), tx.object(oracleCap), pd, tx.object(CLOCK)],
+  });
+  await exec(c, tx, kp, 'refresh oracle');
+}
+
 async function main() {
   const c = client();
   const kp = deployer();
@@ -70,7 +99,9 @@ async function main() {
   const cerida = need(m, 'ceridaPkg');
   const dusdcType = need(m, 'dusdcType');
   const predict = need(m, 'predict');
+  const predictPkg = need(m, 'predictPkg');
   const oracle = need(m, 'oracle');
+  const oracleCap = need(m, 'oracleCap');
   const expiry = BigInt(need(m, 'expiry'));
 
   // 1. Create the vault (+ keeper-owned manager).
@@ -117,7 +148,9 @@ async function main() {
     console.log('escrowed mint intent #0 (UP $63,000)');
   }
 
-  // 3. execute_mint (keeper).
+  // 3. execute_mint (keeper). Re-feed the oracle first so it passes the 30s
+  //    staleness check (see refreshOracle).
+  await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
   {
     const tx = new Transaction();
     tx.moveCall({
@@ -155,10 +188,13 @@ async function main() {
     tx.moveCall({
       target: `${cerida}::vault::request_redeem`,
       typeArguments: [dusdcType],
-      arguments: [tx.object(vault), tx.object(token)],
+      arguments: [tx.object(vault), tx.object(token), tx.pure.u64(qty)],
     });
     await exec(c, tx, kp, 'request_redeem');
   }
+  // Re-feed before execute_redeem too — the oracle is still ACTIVE here (expiry
+  // is ~1h out) so redeem prices off a live-and-fresh oracle.
+  await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
   {
     const tx = new Transaction();
     tx.moveCall({
@@ -180,11 +216,185 @@ async function main() {
     console.log('RedeemExecuted:', ev?.parsedJson);
   }
 
+  console.log('\n binary flow complete (continuous strike).');
+
+  // ── Range path: same vault/manager, vertical range (lower, higher]. ──
+  // Reuses intent/redeem counters (mint intent #1, redeem #1).
+  console.log('\n── range flow (vertical $62,000–$64,000] ──');
+  const lower = 62_000n * PRICE_SCALE; // on-grid ($100 tick)
+  const higher = 64_000n * PRICE_SCALE;
+
+  // 6. request_mint_range.
+  {
+    const tx = new Transaction();
+    const [pay] = tx.splitCoins(
+      tx.object(await dusdcCoin(c, addr, dusdcType)),
+      [tx.pure.u64(escrow)],
+    );
+    tx.moveCall({
+      target: `${cerida}::vault::request_mint_range`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(vault),
+        tx.pure.id(oracle),
+        tx.pure.u64(expiry),
+        tx.pure.u64(lower),
+        tx.pure.u64(higher),
+        tx.pure.u64(qty),
+        pay,
+      ],
+    });
+    await exec(c, tx, kp, 'request_mint_range');
+    console.log('escrowed range mint intent #1');
+  }
+
+  // 7. execute_mint (range). Re-feed the oracle first (30s staleness).
+  let rangeToken: string;
+  await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
+  {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${cerida}::vault::execute_mint`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(vault),
+        tx.object(manager),
+        tx.object(predict),
+        tx.object(oracle),
+        tx.pure.u64(1n),
+        tx.object(CLOCK),
+      ],
+    });
+    const r = await exec(c, tx, kp, 'execute_mint (range)');
+    const ev = (r.events ?? []).find((e: any) =>
+      e.type.endsWith('::vault::MintExecuted'),
+    );
+    console.log('MintExecuted (range):', ev?.parsedJson);
+    rangeToken = created(r, '::position_token::PositionToken');
+    console.log('range PositionToken issued:', rangeToken);
+  }
+
+  // 8. request_redeem + execute_redeem (range).
+  {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${cerida}::vault::request_redeem`,
+      typeArguments: [dusdcType],
+      arguments: [tx.object(vault), tx.object(rangeToken), tx.pure.u64(qty)],
+    });
+    await exec(c, tx, kp, 'request_redeem (range)');
+  }
+  await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
+  {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${cerida}::vault::execute_redeem`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(vault),
+        tx.object(manager),
+        tx.object(predict),
+        tx.object(oracle),
+        tx.pure.u64(1n),
+        tx.object(CLOCK),
+      ],
+    });
+    const r = await exec(c, tx, kp, 'execute_redeem (range)');
+    const ev = (r.events ?? []).find((e: any) =>
+      e.type.endsWith('::vault::RedeemExecuted'),
+    );
+    console.log('RedeemExecuted (range):', ev?.parsedJson);
+  }
+
+  // ── Leverage (Turbo Tickets): open→close, then open→liquidate on a crash.
+  // Permissionless design: trader-signed open/close, anyone can liquidate
+  // (health verified on-chain); no keeper, no manager, no debt.
+  console.log('\n── leverage flow (turbo tickets) ──');
+  const pool = need(m, 'marginPoolId');
+  const book = need(m, 'leverageBookId');
+
+  // open → close: UP @ $63,000 ATM, $20 margin, 100 contracts (basis ~$46 ⇒ ~2.3×).
+  {
+    await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
+    const tx = new Transaction();
+    const [mCoin] = tx.splitCoins(
+      tx.object(await dusdcCoin(c, addr, dusdcType)),
+      [tx.pure.u64(20n * DUSDC_SCALE)],
+    );
+    tx.moveCall({
+      target: `${cerida}::leverage::open_binary`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(pool), tx.object(book), tx.object(predict), tx.object(oracle),
+        tx.pure.id(oracle), tx.pure.u64(expiry), tx.pure.u64(63_000n * PRICE_SCALE), tx.pure.bool(true),
+        mCoin, tx.pure.u64(100n * DUSDC_SCALE), tx.pure.u64(4500n),
+        tx.pure.u64(0n), tx.pure.u64(0n), // tp_value, sl_value (disabled)
+        tx.object(CLOCK),
+      ],
+    });
+    const r = await exec(c, tx, kp, 'open_binary ticket (ATM)');
+    const ev = (r.events ?? []).find((e: any) => e.type.endsWith('::leverage::TicketOpened'));
+    console.log('TicketOpened (ATM):', ev?.parsedJson);
+  }
+  {
+    await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${cerida}::leverage::close`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(pool), tx.object(book), tx.object(predict), tx.object(oracle),
+        tx.pure.u64(0n), tx.object(CLOCK),
+      ],
+    });
+    const r = await exec(c, tx, kp, 'ticket close');
+    const ev = (r.events ?? []).find((e: any) => e.type.endsWith('::leverage::TicketClosed'));
+    console.log('TicketClosed:', ev?.parsedJson);
+  }
+
+  // open → liquidate: UP @ $64,000 OTM, $10 margin (~4.4×), then crash to $55k.
+  {
+    await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
+    const tx = new Transaction();
+    const [mCoin] = tx.splitCoins(
+      tx.object(await dusdcCoin(c, addr, dusdcType)),
+      [tx.pure.u64(10n * DUSDC_SCALE)],
+    );
+    tx.moveCall({
+      target: `${cerida}::leverage::open_binary`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(pool), tx.object(book), tx.object(predict), tx.object(oracle),
+        tx.pure.id(oracle), tx.pure.u64(expiry), tx.pure.u64(64_000n * PRICE_SCALE), tx.pure.bool(true),
+        mCoin, tx.pure.u64(100n * DUSDC_SCALE), tx.pure.u64(4500n),
+        tx.pure.u64(0n), tx.pure.u64(0n), // tp_value, sl_value (disabled)
+        tx.object(CLOCK),
+      ],
+    });
+    const r = await exec(c, tx, kp, 'open_binary ticket (OTM)');
+    const ev = (r.events ?? []).find((e: any) => e.type.endsWith('::leverage::TicketOpened'));
+    console.log('TicketOpened (OTM):', ev?.parsedJson);
+  }
+  {
+    // Adverse move: crash spot → UP @ $64k collapses → knockout. The pool keeps
+    // the escrow (it GAINS the margin) — the CDP here ate $12.59 of bad debt.
+    await refreshOracle(c, kp, predictPkg, oracle, oracleCap, 55_000n);
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${cerida}::leverage::liquidate`,
+      typeArguments: [dusdcType],
+      arguments: [
+        tx.object(pool), tx.object(book), tx.object(predict), tx.object(oracle),
+        tx.pure.u64(1n), tx.object(CLOCK),
+      ],
+    });
+    const r = await exec(c, tx, kp, 'ticket liquidate');
+    const ev = (r.events ?? []).find((e: any) => e.type.endsWith('::leverage::TicketClosed'));
+    console.log('TicketLiquidated:', ev?.parsedJson);
+  }
+
   console.log(
-    '\n binary flow complete (continuous strike). Range flow is the same with',
-  );
-  console.log(
-    '   request_mint_range(vault, oracleId, expiry, lower, higher, qty, coin).',
+    '\n✅ all flows complete: continuous binary + range + turbo-ticket leverage (close & liquidate, zero bad debt).',
   );
 }
 

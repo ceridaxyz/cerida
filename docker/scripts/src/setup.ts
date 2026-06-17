@@ -2,7 +2,7 @@
 //   create_predict<DUSDC> → mint dUSDC → oracle cap → oracle → activate → feed SVI+price
 // Run after deploy.ts. Re-run the feed portion if the oracle drifts past staleness.
 
-import { Inputs, Transaction } from "@mysten/sui/transactions";
+import { Transaction } from "@mysten/sui/transactions";
 import type { SuiClient } from "@mysten/sui/client";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
@@ -19,7 +19,9 @@ import {
 } from "./config.js";
 
 async function exec(c: SuiClient, tx: Transaction, kp: Ed25519Keypair, label: string) {
-  tx.setGasBudget(2_000_000_000);
+  // No setGasBudget: let the SDK auto-estimate via dry-run. create_oracle builds
+  // a ~196-page dense strike matrix whose cost a fixed budget under-provisions;
+  // the canonical Mysten scripts rely on auto-estimation here for the same reason.
   const r = await c.signAndExecuteTransaction({
     transaction: tx,
     signer: kp,
@@ -58,14 +60,12 @@ async function main() {
   //    passed by `&` reference (create_predict wants &Currency<Quote>).
   if (!m.dusdcCurrencyShared) {
     const tx = new Transaction();
-    const cur = await c.getObject({ id: need(m, "dusdcCurrency"), options: {} });
-    const d = cur.data!;
     tx.moveCall({
       target: "0x2::coin_registry::finalize_registration",
       typeArguments: [dusdcType],
       arguments: [
         tx.object("0xc"), // shared CoinRegistry system object
-        tx.object(Inputs.ReceivingRef({ objectId: d.objectId, version: d.version, digest: d.digest })),
+        tx.object(need(m, "dusdcCurrency")), // TTO-owned initial Currency; SDK encodes as Receiving
       ],
     });
     const r = await exec(c, tx, kp, "finalize_registration");
@@ -74,8 +74,9 @@ async function main() {
     console.log("dusdcCurrencyShared =", m.dusdcCurrencyShared);
   }
 
-  // 1. create_predict<DUSDC> — the shared Predict object.
-  {
+  // 1. create_predict<DUSDC> — the shared Predict object. Guarded: the registry
+  //    asserts predict_id.is_none(), so this is one-shot.
+  if (!m.predict) {
     const tx = new Transaction();
     tx.moveCall({
       target: `${predict}::registry::create_predict`,
@@ -94,8 +95,9 @@ async function main() {
     console.log("predict =", m.predict);
   }
 
-  // 2. Mint dUSDC to the deployer (acts as keeper AND user in the sim).
-  {
+  // 2. Mint dUSDC to the deployer (acts as keeper AND user in the sim). Guarded
+  //    so re-runs don't keep minting.
+  if (!m.minted) {
     const tx = new Transaction();
     const coin = tx.moveCall({
       target: "0x2::coin::mint",
@@ -104,11 +106,13 @@ async function main() {
     });
     tx.transferObjects([coin], tx.pure.address(addr));
     await exec(c, tx, kp, "mint dusdc");
+    m.minted = "true";
+    saveManifest(m);
     console.log("minted 1,000,000 dUSDC to", addr);
   }
 
   // 3. Oracle cap.
-  {
+  if (!m.oracleCap) {
     const tx = new Transaction();
     const cap = tx.moveCall({
       target: `${predict}::registry::create_oracle_cap`,
@@ -120,9 +124,10 @@ async function main() {
     saveManifest(m);
   }
 
-  // 4. Create the oracle (1h expiry, $1000 min strike, $100 tick).
+  // 4. Create the oracle (1h expiry, $1000 min strike, $100 tick). Guarded:
+  //    create_oracle is not idempotent — each call mints a new OracleSVI.
   const expiry = BigInt(Date.now() + 60 * 60 * 1000);
-  {
+  if (!m.oracle) {
     const tx = new Transaction();
     tx.moveCall({
       target: `${predict}::registry::create_oracle`,
@@ -144,11 +149,18 @@ async function main() {
     console.log("oracle =", m.oracle, "expiry =", new Date(Number(expiry)).toISOString());
   }
 
-  // 5. Activate + push spot/forward + SVI so the oracle is quotable.
-  {
+  // 5. Register cap → activate → push spot/forward + SVI so the oracle is
+  //    quotable. The oracle boots with an empty authorized-cap set; activate
+  //    asserts the cap is authorized, so register_oracle_cap must come first
+  //    (matches bootstrapOracleStep in services/oracle-feed/executor.ts).
+  if (!m.oracleActivated) {
     const tx = new Transaction();
     const oracle = tx.object(need(m, "oracle"));
     const cap = tx.object(need(m, "oracleCap"));
+    tx.moveCall({
+      target: `${predict}::registry::register_oracle_cap`,
+      arguments: [oracle, tx.object(need(m, "adminCap")), cap],
+    });
     tx.moveCall({ target: `${predict}::oracle::activate`, arguments: [oracle, cap, tx.object(CLOCK)] });
 
     const spot = 63_000n * PRICE_SCALE;
@@ -184,8 +196,74 @@ async function main() {
       target: `${predict}::oracle::update_svi`,
       arguments: [oracle, cap, svi, tx.object(CLOCK)],
     });
-    await exec(c, tx, kp, "activate + feed oracle");
-    console.log("oracle activated + fed (spot $63,000)");
+    await exec(c, tx, kp, "register + activate + feed oracle");
+    m.oracleActivated = "true";
+    saveManifest(m);
+    console.log("oracle registered + activated + fed (spot $63,000)");
+  }
+
+  // 6. Seed the Predict vault with PLP liquidity (mirrors supplyTx in
+  //    simulations/runtime.ts). Without this the vault can't take the other
+  //    side of a mint and execute_mint fails. Mint dUSDC → predict::supply →
+  //    keep the PLP coin.
+  if (!m.supplied) {
+    const seed = 500_000n * DUSDC_SCALE;
+    const tx = new Transaction();
+    const [dusdc] = tx.moveCall({
+      target: "0x2::coin::mint",
+      typeArguments: [dusdcType],
+      arguments: [tx.object(need(m, "dusdcCap")), tx.pure.u64(seed)],
+    });
+    const [plp] = tx.moveCall({
+      target: `${predict}::predict::supply`,
+      typeArguments: [dusdcType],
+      arguments: [tx.object(need(m, "predict")), dusdc, tx.object(CLOCK)],
+    });
+    tx.transferObjects([plp], tx.pure.address(addr));
+    await exec(c, tx, kp, "supply vault");
+    m.supplied = "true";
+    saveManifest(m);
+    console.log(`seeded Predict vault with ${seed / DUSDC_SCALE} dUSDC`);
+  }
+
+  // 7. Leverage: create the Cerida MarginPool (lender + Earn vault) and the
+  //    LeverageBook (custody of leveraged positions), then seed the pool with
+  //    dUSDC so it can lend against margin. Guarded so re-runs don't re-create.
+  if (!m.leverageSeeded) {
+    const cerida = need(m, "ceridaPkg");
+
+    const tx1 = new Transaction();
+    tx1.moveCall({
+      target: `${cerida}::leverage::create_pool`,
+      typeArguments: [dusdcType],
+      // fee schedule fixed at creation: perf 10%, liquidation penalty 5%, open 0.5%
+      arguments: [tx1.pure.u64(1000n), tx1.pure.u64(500n), tx1.pure.u64(50n)],
+    });
+    tx1.moveCall({ target: `${cerida}::leverage::create_book`, typeArguments: [dusdcType], arguments: [] });
+    tx1.moveCall({ target: `${cerida}::leverage::create_limit_book`, typeArguments: [dusdcType], arguments: [] });
+    const r1 = await exec(c, tx1, kp, "create margin pool + book + limit book");
+    m.marginPoolId = created(r1, "::leverage::MarginPool");
+    m.leverageBookId = created(r1, "::leverage::LeverageBook");
+    m.limitBookId = created(r1, "::leverage::LimitBook");
+
+    const seed = 500_000n * DUSDC_SCALE;
+    const tx2 = new Transaction();
+    const [dusdc] = tx2.moveCall({
+      target: "0x2::coin::mint",
+      typeArguments: [dusdcType],
+      arguments: [tx2.object(need(m, "dusdcCap")), tx2.pure.u64(seed)],
+    });
+    const [share] = tx2.moveCall({
+      target: `${cerida}::leverage::supply`,
+      typeArguments: [dusdcType],
+      arguments: [tx2.object(m.marginPoolId), dusdc],
+    });
+    tx2.transferObjects([share], tx2.pure.address(addr));
+    await exec(c, tx2, kp, "seed margin pool");
+
+    m.leverageSeeded = "true";
+    saveManifest(m);
+    console.log(`margin pool ${m.marginPoolId} + book ${m.leverageBookId}, seeded ${seed / DUSDC_SCALE} dUSDC`);
   }
 
   console.log("\nsetup complete:\n", JSON.stringify(m, null, 2));

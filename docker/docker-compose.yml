@@ -23,6 +23,9 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
+      # Cap the in-memory store so a long-running localnet can't balloon
+      # unbounded (RAM -> Docker VM disk) and starve the host disk.
+      o: size=3g
 
 services:
   sui-localnet:
@@ -60,3 +63,12 @@ services:
       retries: 30
       start_period: 30s
     restart: unless-stopped
+    # Bound Docker's capture of the node's stdout. Without this, a long-running
+    # localnet's sui_node=info stream grows the json-file log unbounded into the
+    # Docker VM disk until the host disk fills and the node silently degrades
+    # (RPC -32603) while the port-only healthcheck still reports "healthy".
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
