@@ -118,3 +118,25 @@ flow     cerida::vault::create<DUSDC>() → vault + manager (keeper = deployer)
 docker compose down -v        # wipe chain; next `up` is a fresh genesis
 rm -f deployments/local.json  # clear stale ids
 ```
+
+## GCP tooling container
+
+Use Google's official Cloud CLI Docker image when you want GCP-shaped tooling
+without installing `gcloud` on the host.
+
+```bash
+cd /Users/mac/Work/cerida/docker
+cp gcp.env.example .env.gcp
+docker compose --env-file .env.gcp -f docker-compose.gcp.yml run --rm gcloud version
+docker compose --env-file .env.gcp -f docker-compose.gcp.yml run --rm gcloud auth login --no-launch-browser
+docker compose --env-file .env.gcp -f docker-compose.gcp.yml run --rm gcloud config set project "$GCP_PROJECT_ID"
+```
+
+When we are ready to test against a managed Cloud SQL instance, the same overlay
+has the official Cloud SQL Auth Proxy image:
+
+```bash
+docker compose --env-file .env.gcp -f docker-compose.gcp.yml --profile gcp-db up cloud-sql-proxy
+```
+
+That exposes the remote database locally at `127.0.0.1:5433`.

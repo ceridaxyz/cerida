@@ -1,0 +1,38 @@
+# GCP tooling overlay for local development.
+#
+# This does not replace docker/docker-compose.yml. It gives the repo an
+# official Google Cloud CLI container with persistent gcloud config, plus an
+# optional Cloud SQL Auth Proxy service for later managed Postgres/Timescale
+# testing.
+
+volumes:
+  gcloud_config:
+
+services:
+  gcloud:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    working_dir: /workspace
+    volumes:
+      - gcloud_config:/root/.config/gcloud
+      - ..:/workspace
+    environment:
+      CLOUDSDK_CORE_PROJECT: ${GCP_PROJECT_ID:-}
+      CLOUDSDK_COMPUTE_REGION: ${GCP_REGION:-us-central1}
+      CLOUDSDK_COMPUTE_ZONE: ${GCP_ZONE:-us-central1-a}
+    entrypoint: ["gcloud"]
+    command: ["--help"]
+    profiles:
+      - gcp
+
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
+    command:
+      - "--address=0.0.0.0"
+      - "--port=5432"
+      - "${GCP_CLOUD_SQL_INSTANCE:?set GCP_CLOUD_SQL_INSTANCE in docker/.env.gcp}"
+    ports:
+      - "5433:5432"
+    volumes:
+      - gcloud_config:/root/.config/gcloud:ro
+    profiles:
+      - gcp-db
