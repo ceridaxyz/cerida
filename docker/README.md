@@ -32,6 +32,14 @@ docker compose up -d
 docker compose logs -f          # wait until "Sui started"
 ```
 
+This boots the localnet plus the Rust backend stack:
+
+- `timescaledb` on `127.0.0.1:5432`
+- `redis` on `127.0.0.1:6379`
+- `cerida-api` on `http://127.0.0.1:8788`
+- `cerida-indexer`
+- `cerida-keeper` in dry-run mode by default
+
 This boots a `--force-regenesis` localnet. Localnet always genesises to chain-id
 **`b485d3e3`**, which is exactly the `[environments] local = "b485d3e3"` entry
 already pinned in Predict's `Move.toml` — so the package's published addresses
