@@ -18,19 +18,26 @@ import {
   need,
   PRICE_SCALE,
   type Manifest,
+  saveManifest,
 } from './config.js';
 
 declare const process: {
   exit(code?: number): void;
 };
 
+const ORACLE_TTL_MS = 6n * 60n * 60n * 1000n;
+const ORACLE_REFRESH_WINDOW_MS = 30n * 60n * 1000n;
+
 async function exec(
   c: SuiClient,
   tx: Transaction,
   kp: Ed25519Keypair,
   label: string,
+  opts: { gasBudget?: bigint | null } = {},
 ) {
-  tx.setGasBudget(2_000_000_000);
+  if (opts.gasBudget !== null) {
+    tx.setGasBudget(opts.gasBudget ?? 2_000_000_000n);
+  }
   const r = await c.signAndExecuteTransaction({
     transaction: tx,
     signer: kp,
@@ -89,6 +96,108 @@ async function refreshOracle(
   await exec(c, tx, kp, 'refresh oracle');
 }
 
+async function feedSviAndPrices(
+  c: SuiClient,
+  kp: Ed25519Keypair,
+  predictPkg: string,
+  oracle: string,
+  oracleCap: string,
+  label = 'feed oracle',
+) {
+  const tx = new Transaction();
+  const oracleObj = tx.object(oracle);
+  const cap = tx.object(oracleCap);
+  const spot = 63_000n * PRICE_SCALE;
+  const pd = tx.moveCall({
+    target: `${predictPkg}::oracle::new_price_data`,
+    arguments: [tx.pure.u64(spot), tx.pure.u64(spot)],
+  });
+  tx.moveCall({
+    target: `${predictPkg}::oracle::update_prices`,
+    arguments: [oracleObj, cap, pd, tx.object(CLOCK)],
+  });
+
+  const rho = tx.moveCall({
+    target: `${predictPkg}::i64::from_parts`,
+    arguments: [tx.pure.u64(300_000_000n), tx.pure.bool(true)],
+  });
+  const mm = tx.moveCall({
+    target: `${predictPkg}::i64::from_parts`,
+    arguments: [tx.pure.u64(0n), tx.pure.bool(false)],
+  });
+  const svi = tx.moveCall({
+    target: `${predictPkg}::oracle::new_svi_params`,
+    arguments: [
+      tx.pure.u64(40_000_000n),
+      tx.pure.u64(100_000_000n),
+      rho,
+      mm,
+      tx.pure.u64(100_000_000n),
+    ],
+  });
+  tx.moveCall({
+    target: `${predictPkg}::oracle::update_svi`,
+    arguments: [oracleObj, cap, svi, tx.object(CLOCK)],
+  });
+  await exec(c, tx, kp, label);
+}
+
+async function ensureFreshOracle(
+  c: SuiClient,
+  kp: Ed25519Keypair,
+  m: Manifest,
+): Promise<{ oracle: string; expiry: bigint }> {
+  const now = BigInt(Date.now());
+  const currentExpiry = m.expiry ? BigInt(m.expiry) : 0n;
+  if (m.oracle && currentExpiry > now + ORACLE_REFRESH_WINDOW_MS) {
+    return { oracle: m.oracle, expiry: currentExpiry };
+  }
+
+  const predictPkg = need(m, 'predictPkg');
+  const expiry = now + ORACLE_TTL_MS;
+  console.log('saved oracle expired/near expiry; creating fresh local oracle');
+
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${predictPkg}::registry::create_oracle`,
+    arguments: [
+      tx.object(need(m, 'registry')),
+      tx.object(need(m, 'predict')),
+      tx.object(need(m, 'adminCap')),
+      tx.object(need(m, 'oracleCap')),
+      tx.pure.string('BTC'),
+      tx.pure.u64(expiry),
+      tx.pure.u64(1000n * PRICE_SCALE),
+      tx.pure.u64(100n * PRICE_SCALE),
+    ],
+  });
+  const r = await exec(c, tx, kp, 'create fresh oracle', { gasBudget: null });
+  const oracle = created(r, '::oracle::OracleSVI');
+  m.oracle = oracle;
+  m.expiry = expiry.toString();
+  delete m.oracleActivated;
+  saveManifest(m);
+
+  const tx2 = new Transaction();
+  const oracleObj = tx2.object(oracle);
+  const cap = tx2.object(need(m, 'oracleCap'));
+  tx2.moveCall({
+    target: `${predictPkg}::registry::register_oracle_cap`,
+    arguments: [oracleObj, tx2.object(need(m, 'adminCap')), cap],
+  });
+  tx2.moveCall({
+    target: `${predictPkg}::oracle::activate`,
+    arguments: [oracleObj, cap, tx2.object(CLOCK)],
+  });
+  await exec(c, tx2, kp, 'register + activate fresh oracle');
+  await feedSviAndPrices(c, kp, predictPkg, oracle, need(m, 'oracleCap'), 'feed fresh oracle');
+
+  m.oracleActivated = 'true';
+  saveManifest(m);
+  console.log('fresh oracle =', oracle, 'expiry =', new Date(Number(expiry)).toISOString());
+  return { oracle, expiry };
+}
+
 async function main() {
   const c = client();
   const kp = deployer();
@@ -100,9 +209,10 @@ async function main() {
   const dusdcType = need(m, 'dusdcType');
   const predict = need(m, 'predict');
   const predictPkg = need(m, 'predictPkg');
-  const oracle = need(m, 'oracle');
   const oracleCap = need(m, 'oracleCap');
-  const expiry = BigInt(need(m, 'expiry'));
+  const fresh = await ensureFreshOracle(c, kp, m);
+  const oracle = fresh.oracle;
+  const expiry = fresh.expiry;
 
   // 1. Create the vault (+ keeper-owned manager).
   let vault: string;

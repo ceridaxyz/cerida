@@ -18,6 +18,9 @@ import {
   type Manifest,
 } from "./config.js";
 
+const ORACLE_TTL_MS = 6n * 60n * 60n * 1000n;
+const ORACLE_REFRESH_WINDOW_MS = 30n * 60n * 1000n;
+
 async function exec(c: SuiClient, tx: Transaction, kp: Ed25519Keypair, label: string) {
   // No setGasBudget: let the SDK auto-estimate via dry-run. create_oracle builds
   // a ~196-page dense strike matrix whose cost a fixed budget under-provisions;
@@ -124,9 +127,20 @@ async function main() {
     saveManifest(m);
   }
 
-  // 4. Create the oracle (1h expiry, $1000 min strike, $100 tick). Guarded:
+  // 4. Create the oracle ($1000 min strike, $100 tick). Guarded, but with
+  //    local-e2e expiry rotation: if a saved oracle is expired or too close to
+  //    expiry, create and feed a fresh one while keeping the deployed packages.
+  const now = BigInt(Date.now());
+  if (m.oracle && m.expiry && BigInt(m.expiry) <= now + ORACLE_REFRESH_WINDOW_MS) {
+    console.log("saved oracle expired/near expiry; rotating local oracle");
+    delete m.oracle;
+    delete m.expiry;
+    delete m.oracleActivated;
+    saveManifest(m);
+  }
+
   //    create_oracle is not idempotent — each call mints a new OracleSVI.
-  const expiry = BigInt(Date.now() + 60 * 60 * 1000);
+  const expiry = now + ORACLE_TTL_MS;
   if (!m.oracle) {
     const tx = new Transaction();
     tx.moveCall({
