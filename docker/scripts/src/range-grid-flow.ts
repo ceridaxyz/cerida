@@ -14,7 +14,6 @@ import {
   loadManifest,
   need,
   PRICE_SCALE,
-  saveManifest,
 } from './config.js';
 import type { Manifest } from './config.js';
 
@@ -23,8 +22,7 @@ declare const process: {
   exit(code?: number): void;
 };
 
-const ORACLE_TTL_MS = 6n * 60n * 60n * 1000n;
-const ORACLE_REFRESH_WINDOW_MS = 30n * 60n * 1000n;
+const MIN_ORACLE_WINDOW_MS = 5n * 60n * 1000n;
 const CERIDA_API = process.env.CERIDA_API ?? 'http://127.0.0.1:8788';
 
 type TxResult = Awaited<ReturnType<SuiClient['signAndExecuteTransaction']>>;
@@ -65,18 +63,6 @@ function formatError(err: unknown): string {
     return parts.join(' ');
   }
   return String(err);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetryableCreateOracleError(err: unknown): boolean {
-  const text = formatError(err);
-  return (
-    text.includes('needs to be rebuilt because object') ||
-    text.includes('Internal error')
-  );
 }
 
 async function exec(
@@ -207,72 +193,16 @@ async function feedSviAndPrices(
 }
 
 async function ensureFreshOracle(
-  c: SuiClient,
-  kp: Ed25519Keypair,
   m: Manifest,
 ): Promise<{ oracle: string; expiry: bigint }> {
   const now = BigInt(Date.now());
   const currentExpiry = m.expiry ? BigInt(m.expiry) : 0n;
-  if (m.oracle && currentExpiry > now + ORACLE_REFRESH_WINDOW_MS) {
+  if (m.oracle && currentExpiry > now + MIN_ORACLE_WINDOW_MS) {
     return { oracle: m.oracle, expiry: currentExpiry };
   }
-
-  const predictPkg = need(m, 'predictPkg');
-  const expiry = now + ORACLE_TTL_MS;
-  console.log('saved oracle expired/near expiry; creating fresh local oracle');
-
-  async function submitCreateOracle(attempt: number) {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${predictPkg}::registry::create_oracle`,
-      arguments: [
-        tx.object(need(m, 'registry')),
-        tx.object(need(m, 'predict')),
-        tx.object(need(m, 'adminCap')),
-        tx.object(need(m, 'oracleCap')),
-        tx.pure.string('BTC'),
-        tx.pure.u64(expiry),
-        tx.pure.u64(1000n * PRICE_SCALE),
-        tx.pure.u64(100n * PRICE_SCALE),
-      ],
-    });
-    return exec(c, tx, kp, `create fresh oracle attempt ${attempt}`, {
-      gasBudget: null,
-    });
-  }
-
-  let r: TxResult;
-  try {
-    r = await submitCreateOracle(1);
-  } catch (err) {
-    if (!isRetryableCreateOracleError(err)) throw err;
-    console.warn('create oracle failed with retryable localnet error; rebuilding tx');
-    await sleep(750);
-    r = await submitCreateOracle(2);
-  }
-  const oracle = created(r, '::oracle::OracleSVI');
-  m.oracle = oracle;
-  m.expiry = expiry.toString();
-  delete m.oracleActivated;
-  saveManifest(m);
-
-  const tx2 = new Transaction();
-  const oracleObj = tx2.object(oracle);
-  const cap = tx2.object(need(m, 'oracleCap'));
-  tx2.moveCall({
-    target: `${predictPkg}::registry::register_oracle_cap`,
-    arguments: [oracleObj, tx2.object(need(m, 'adminCap')), cap],
-  });
-  tx2.moveCall({
-    target: `${predictPkg}::oracle::activate`,
-    arguments: [oracleObj, cap, tx2.object(CLOCK)],
-  });
-  await exec(c, tx2, kp, 'register + activate fresh oracle');
-  await feedSviAndPrices(c, kp, predictPkg, oracle, need(m, 'oracleCap'));
-
-  m.oracleActivated = 'true';
-  saveManifest(m);
-  return { oracle, expiry };
+  throw new Error(
+    'range-grid requires a live setup oracle with at least 5 minutes remaining; run `bun local:setup` first',
+  );
 }
 
 function createVaultTx(cerida: string, dusdcType: string) {
@@ -414,7 +344,7 @@ async function main() {
   const predict = need(m, 'predict');
   const predictPkg = need(m, 'predictPkg');
   const oracleCap = need(m, 'oracleCap');
-  const fresh = await ensureFreshOracle(c, kp, m);
+  const fresh = await ensureFreshOracle(m);
   const oracle = fresh.oracle;
   const expiry = fresh.expiry;
 
