@@ -8,6 +8,7 @@
     "deploy": "bun src/deploy.ts",
     "setup": "bun src/setup.ts",
     "flow": "bun src/flow.ts",
+    "settlement": "bun src/settlement-flow.ts",
     "all": "bun src/deploy.ts && bun src/setup.ts && bun src/flow.ts"
   },
   "dependencies": {
