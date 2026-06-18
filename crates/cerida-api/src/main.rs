@@ -86,9 +86,9 @@ async fn health() -> Json<Value> {
 
 async fn markets(State(state): State<AppState>) -> Json<Value> {
     let rows = sqlx::query(
-        "SELECT po.oracle_id, po.asset, po.status, extract(epoch from po.expiry) * 1000 AS expiry,
+        "SELECT po.oracle_id, po.asset, po.status, (extract(epoch from po.expiry) * 1000)::DOUBLE PRECISION AS expiry,
                 po.tick_size, po.min_strike, ms.spot, ms.forward,
-                extract(epoch from ms.ts) * 1000 AS ts
+                (extract(epoch from ms.ts) * 1000)::DOUBLE PRECISION AS ts
          FROM predict_oracles po
          LEFT JOIN LATERAL (
            SELECT * FROM market_snapshots ms
@@ -109,7 +109,7 @@ async fn snapshot(
     axum::extract::Path(oracle_id): axum::extract::Path<String>,
 ) -> Json<Value> {
     let row = sqlx::query(
-        "SELECT oracle_id, extract(epoch from ts) * 1000 AS ts, spot, forward, svi
+        "SELECT oracle_id, (extract(epoch from ts) * 1000)::DOUBLE PRECISION AS ts, spot, forward, svi
          FROM market_snapshots WHERE oracle_id = $1 ORDER BY ts DESC LIMIT 1",
     )
     .bind(oracle_id)
@@ -127,7 +127,7 @@ async fn history(
 ) -> Json<Value> {
     let limit = query.limit.unwrap_or(500).clamp(1, 2_000);
     let rows = sqlx::query(
-        "SELECT oracle_id, extract(epoch from ts) * 1000 AS ts, spot, forward, svi
+        "SELECT oracle_id, (extract(epoch from ts) * 1000)::DOUBLE PRECISION AS ts, spot, forward, svi
          FROM market_snapshots WHERE oracle_id = $1 ORDER BY ts DESC LIMIT $2",
     )
     .bind(oracle_id)
@@ -148,7 +148,7 @@ async fn surface(
         "WITH latest AS (
            SELECT ts FROM derived_prices WHERE oracle_id = $1 ORDER BY ts DESC LIMIT 1
          )
-         SELECT oracle_id, extract(epoch from ts) * 1000 AS ts, strike, yes_cents, no_cents, iv, tenor_days
+         SELECT oracle_id, (extract(epoch from ts) * 1000)::DOUBLE PRECISION AS ts, strike, yes_cents, no_cents, iv, tenor_days
          FROM derived_prices WHERE oracle_id = $1 AND ts = (SELECT ts FROM latest)
          ORDER BY strike ASC",
     )
@@ -163,7 +163,7 @@ async fn flow(State(state): State<AppState>, Query(query): Query<FlowQuery>) -> 
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let rows = if let Some(oracle_id) = query.oracle_id {
         sqlx::query(
-            "SELECT event_type, payload, extract(epoch from inserted_at) * 1000 AS ts
+            "SELECT event_type, payload, (extract(epoch from inserted_at) * 1000)::DOUBLE PRECISION AS ts
              FROM cerida_events
              WHERE payload->>'oracle_id' = $1
              ORDER BY inserted_at DESC LIMIT $2",
@@ -175,7 +175,7 @@ async fn flow(State(state): State<AppState>, Query(query): Query<FlowQuery>) -> 
         .unwrap_or_default()
     } else {
         sqlx::query(
-            "SELECT event_type, payload, extract(epoch from inserted_at) * 1000 AS ts
+            "SELECT event_type, payload, (extract(epoch from inserted_at) * 1000)::DOUBLE PRECISION AS ts
              FROM cerida_events ORDER BY inserted_at DESC LIMIT $1",
         )
         .bind(limit)
@@ -194,7 +194,7 @@ async fn vault_intents(
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let rows = sqlx::query(
         "SELECT vault_id, intent_id, kind, user_address, oracle_id,
-                extract(epoch from expiry) * 1000 AS expiry, is_range, qty, escrowed, status, payload
+                (extract(epoch from expiry) * 1000)::DOUBLE PRECISION AS expiry, is_range, qty, escrowed, status, payload
          FROM intents WHERE vault_id = $1 ORDER BY updated_at DESC LIMIT $2",
     )
     .bind(vault_id)
@@ -212,8 +212,8 @@ async fn keeper_jobs(
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let rows = sqlx::query(
         "SELECT id, lane, job_type, status, priority, attempts, payload, error, tx_digest,
-                extract(epoch from available_at) * 1000 AS available_at,
-                extract(epoch from updated_at) * 1000 AS updated_at
+                (extract(epoch from available_at) * 1000)::DOUBLE PRECISION AS available_at,
+                (extract(epoch from updated_at) * 1000)::DOUBLE PRECISION AS updated_at
          FROM keeper_jobs ORDER BY updated_at DESC LIMIT $1",
     )
     .bind(limit)
