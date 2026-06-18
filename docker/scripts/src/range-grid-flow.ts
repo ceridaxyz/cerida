@@ -10,7 +10,6 @@ import {
   client,
   deployer,
   DUSDC_SCALE,
-  fund,
   loadManifest,
   need,
   PRICE_SCALE,
@@ -360,11 +359,6 @@ async function main() {
   const kp = deployer();
   const addr = kp.toSuiAddress();
   const m = loadManifest();
-  try {
-    await fund(addr);
-  } catch {
-    console.warn('faucet unavailable; continuing with deployer gas');
-  }
 
   const cerida = need(m, 'ceridaPkg');
   const dusdcType = need(m, 'dusdcType');
