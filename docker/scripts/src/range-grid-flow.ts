@@ -67,6 +67,18 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableCreateOracleError(err: unknown): boolean {
+  const text = formatError(err);
+  return (
+    text.includes('needs to be rebuilt because object') ||
+    text.includes('Internal error')
+  );
+}
+
 async function exec(
   c: SuiClient,
   tx: Transaction,
@@ -209,21 +221,35 @@ async function ensureFreshOracle(
   const expiry = now + ORACLE_TTL_MS;
   console.log('saved oracle expired/near expiry; creating fresh local oracle');
 
-  const tx = new Transaction();
-  tx.moveCall({
-    target: `${predictPkg}::registry::create_oracle`,
-    arguments: [
-      tx.object(need(m, 'registry')),
-      tx.object(need(m, 'predict')),
-      tx.object(need(m, 'adminCap')),
-      tx.object(need(m, 'oracleCap')),
-      tx.pure.string('BTC'),
-      tx.pure.u64(expiry),
-      tx.pure.u64(1000n * PRICE_SCALE),
-      tx.pure.u64(100n * PRICE_SCALE),
-    ],
-  });
-  const r = await exec(c, tx, kp, 'create fresh oracle', { gasBudget: null });
+  async function submitCreateOracle(attempt: number) {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${predictPkg}::registry::create_oracle`,
+      arguments: [
+        tx.object(need(m, 'registry')),
+        tx.object(need(m, 'predict')),
+        tx.object(need(m, 'adminCap')),
+        tx.object(need(m, 'oracleCap')),
+        tx.pure.string('BTC'),
+        tx.pure.u64(expiry),
+        tx.pure.u64(1000n * PRICE_SCALE),
+        tx.pure.u64(100n * PRICE_SCALE),
+      ],
+    });
+    return exec(c, tx, kp, `create fresh oracle attempt ${attempt}`, {
+      gasBudget: null,
+    });
+  }
+
+  let r: TxResult;
+  try {
+    r = await submitCreateOracle(1);
+  } catch (err) {
+    if (!isRetryableCreateOracleError(err)) throw err;
+    console.warn('create oracle failed with retryable localnet error; rebuilding tx');
+    await sleep(750);
+    r = await submitCreateOracle(2);
+  }
   const oracle = created(r, '::oracle::OracleSVI');
   m.oracle = oracle;
   m.expiry = expiry.toString();
