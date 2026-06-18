@@ -88,7 +88,9 @@ async function exec(
   if (r.effects?.status.status !== 'success' && !opts.allowFailure) {
     throw new Error(`${label} failed: ${JSON.stringify(r.effects?.status)}`);
   }
-  await c.waitForTransaction({ digest: r.digest });
+  if (r.effects?.status.status === 'success') {
+    await c.waitForTransaction({ digest: r.digest });
+  }
   return r;
 }
 
@@ -414,6 +416,7 @@ async function main() {
   ] as const;
 
   for (const item of invalidCases) {
+    console.log(`checking ${item.label}`);
     const intentId = await requestRangeIntent(c, kp, {
       cerida,
       dusdcType,
@@ -426,6 +429,7 @@ async function main() {
       escrow: 2n * DUSDC_SCALE,
       owner: addr,
     });
+    console.log(`${item.label} intent = ${intentId}`);
     await refreshOracle(c, kp, predictPkg, oracle, oracleCap);
     await expectFailure(
       c,
