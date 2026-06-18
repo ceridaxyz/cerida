@@ -8,6 +8,7 @@ import {
   IconStar,
   IconFileText,
   IconUser,
+  IconSettings,
   IconChevronLeft,
   IconChevronRight,
 } from '@tabler/icons-react'
@@ -18,6 +19,7 @@ const GridIcon = () => <IconLayoutGrid size={18} stroke={1.75} />
 const PortfolioIcon = () => <IconBriefcase size={18} stroke={1.75} />
 const PointsIcon = () => <IconStar size={18} stroke={1.75} />
 const DocsIcon = () => <IconFileText size={18} stroke={1.75} />
+const SettingsIcon = () => <IconSettings size={18} stroke={1.75} />
 const UserIcon = () => <IconUser size={16} stroke={2} />
 
 const CollapseIcon = ({ collapsed }: { collapsed: boolean }) =>
@@ -95,6 +97,7 @@ const Sidebar = () => {
         <Divider />
 
         <NavItem to="/docs" icon={<DocsIcon />} label="Docs" collapsed={collapsed} />
+        <NavItem to="/settings" icon={<SettingsIcon />} label="Settings" collapsed={collapsed} />
       </nav>
 
       {/* Lower section — empty for now */}
