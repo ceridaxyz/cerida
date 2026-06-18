@@ -140,10 +140,15 @@ async function dusdcCoin(
   c: SuiClient,
   owner: string,
   dusdcType: string,
+  minBalance: bigint,
 ): Promise<string> {
   const coins = await c.getCoins({ owner, coinType: dusdcType });
-  if (coins.data.length === 0) throw new Error('no dUSDC - run setup.ts');
-  return coins.data[0].coinObjectId;
+  for (const coin of coins.data) {
+    if (BigInt(coin.balance) < minBalance) continue;
+    const obj = await c.getObject({ id: coin.coinObjectId });
+    if (obj.data) return coin.coinObjectId;
+  }
+  throw new Error(`no live dUSDC coin with at least ${minBalance} - run setup.ts`);
 }
 
 async function refreshOracle(
@@ -253,8 +258,10 @@ async function requestRangeIntent(
   },
 ) {
   const tx = new Transaction();
+  const coin = await dusdcCoin(c, args.owner, args.dusdcType, args.escrow);
+  console.log(`using dUSDC coin ${coin} for ${args.escrow}`);
   const [pay] = tx.splitCoins(
-    tx.object(await dusdcCoin(c, args.owner, args.dusdcType)),
+    tx.object(coin),
     [tx.pure.u64(args.escrow)],
   );
   tx.moveCall({
