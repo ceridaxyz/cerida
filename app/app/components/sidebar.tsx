@@ -12,6 +12,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
 } from '@tabler/icons-react'
+import SettingsModal from './settings-modal'
 
 const HomeIcon = () => <IconHome size={18} stroke={1.75} />
 const MarketsIcon = () => <IconActivity size={18} stroke={1.75} />
@@ -50,8 +51,24 @@ const NavItem = ({
   </NavLink>
 )
 
+const NavButton = ({
+  icon, label, collapsed, onClick,
+}: {
+  icon: React.ReactNode; label: string; collapsed: boolean; onClick: () => void
+}) => (
+  <button
+    onClick={onClick}
+    title={collapsed ? label : undefined}
+    className={`flex items-center gap-3 mx-2 px-2 py-2.5 rounded-[6px] transition-colors text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-card/60 ${collapsed ? 'justify-center' : ''}`}
+  >
+    <span className="shrink-0">{icon}</span>
+    {!collapsed && <span className="truncate">{label}</span>}
+  </button>
+)
+
 const Sidebar = () => {
   const [collapsed, setCollapsed] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     const stored = localStorage.getItem('sidebar-collapsed')
@@ -97,7 +114,12 @@ const Sidebar = () => {
         <Divider />
 
         <NavItem to="/docs" icon={<DocsIcon />} label="Docs" collapsed={collapsed} />
-        <NavItem to="/settings" icon={<SettingsIcon />} label="Settings" collapsed={collapsed} />
+        <NavButton
+          icon={<SettingsIcon />}
+          label="Settings"
+          collapsed={collapsed}
+          onClick={() => setSettingsOpen(true)}
+        />
       </nav>
 
       {/* Lower section — empty for now */}
@@ -123,6 +145,8 @@ const Sidebar = () => {
           {!collapsed && <span className="text-[13px] font-medium">Collapse</span>}
         </button>
       </div>
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   )
 }

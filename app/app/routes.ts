@@ -5,5 +5,4 @@ export default [
   route('trade', 'routes/markets.$slug/route.tsx'),
   route('trade/grid', 'routes/grid/route.tsx'),
   route('portfolio', 'routes/portfolio/route.tsx'),
-  route('settings', 'routes/settings/route.tsx'),
 ] satisfies RouteConfig
