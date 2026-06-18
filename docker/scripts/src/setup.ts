@@ -25,11 +25,16 @@ async function exec(c: SuiClient, tx: Transaction, kp: Ed25519Keypair, label: st
   // No setGasBudget: let the SDK auto-estimate via dry-run. create_oracle builds
   // a ~196-page dense strike matrix whose cost a fixed budget under-provisions;
   // the canonical Mysten scripts rely on auto-estimation here for the same reason.
-  const r = await c.signAndExecuteTransaction({
-    transaction: tx,
-    signer: kp,
-    options: { showEffects: true, showObjectChanges: true, showEvents: true },
-  });
+  let r: Awaited<ReturnType<SuiClient["signAndExecuteTransaction"]>>;
+  try {
+    r = await c.signAndExecuteTransaction({
+      transaction: tx,
+      signer: kp,
+      options: { showEffects: true, showObjectChanges: true, showEvents: true },
+    });
+  } catch (err) {
+    throw new Error(`${label} RPC failed: ${formatError(err)}`);
+  }
   if (r.effects?.status.status !== "success") {
     throw new Error(`${label} failed: ${JSON.stringify(r.effects?.status)}`);
   }
@@ -37,6 +42,29 @@ async function exec(c: SuiClient, tx: Transaction, kp: Ed25519Keypair, label: st
   // outputs (objects created here) without a read-after-write race.
   await c.waitForTransaction({ digest: r.digest });
   return r;
+}
+
+function formatError(err: unknown): string {
+  if (err instanceof Error) {
+    const parts = [err.message];
+    const maybe = err as Error & { code?: unknown; type?: unknown };
+    if (maybe.code !== undefined) parts.push(`code=${String(maybe.code)}`);
+    if (maybe.type !== undefined) parts.push(`type=${String(maybe.type)}`);
+    return parts.join(" ");
+  }
+  return String(err);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableCreateOracleError(err: unknown): boolean {
+  const text = formatError(err);
+  return (
+    text.includes("needs to be rebuilt because object") ||
+    text.includes("Internal error")
+  );
 }
 
 function created(r: any, needle: string): string {
@@ -142,21 +170,33 @@ async function main() {
   //    create_oracle is not idempotent — each call mints a new OracleSVI.
   const expiry = now + ORACLE_TTL_MS;
   if (!m.oracle) {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${predict}::registry::create_oracle`,
-      arguments: [
-        tx.object(need(m, "registry")),
-        tx.object(need(m, "predict")),
-        tx.object(need(m, "adminCap")),
-        tx.object(need(m, "oracleCap")),
-        tx.pure.string("BTC"),
-        tx.pure.u64(expiry),
-        tx.pure.u64(1000n * PRICE_SCALE), // min_strike $1,000
-        tx.pure.u64(100n * PRICE_SCALE), // tick $100  (both satisfy the grid asserts)
-      ],
-    });
-    const r = await exec(c, tx, kp, "create_oracle");
+    async function submitCreateOracle(attempt: number) {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${predict}::registry::create_oracle`,
+        arguments: [
+          tx.object(need(m, "registry")),
+          tx.object(need(m, "predict")),
+          tx.object(need(m, "adminCap")),
+          tx.object(need(m, "oracleCap")),
+          tx.pure.string("BTC"),
+          tx.pure.u64(expiry),
+          tx.pure.u64(1000n * PRICE_SCALE), // min_strike $1,000
+          tx.pure.u64(100n * PRICE_SCALE), // tick $100  (both satisfy the grid asserts)
+        ],
+      });
+      return exec(c, tx, kp, `create_oracle attempt ${attempt}`);
+    }
+
+    let r: Awaited<ReturnType<SuiClient["signAndExecuteTransaction"]>>;
+    try {
+      r = await submitCreateOracle(1);
+    } catch (err) {
+      if (!isRetryableCreateOracleError(err)) throw err;
+      console.warn("create_oracle failed with retryable localnet error; rebuilding tx");
+      await sleep(750);
+      r = await submitCreateOracle(2);
+    }
     m.oracle = created(r, "::oracle::OracleSVI");
     m.expiry = expiry.toString();
     saveManifest(m);
