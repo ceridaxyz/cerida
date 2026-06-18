@@ -102,14 +102,14 @@ async function execRebuiltOnStale(
   c: SuiClient,
   kp: Ed25519Keypair,
   label: string,
-  build: () => Transaction,
+  build: () => Transaction | Promise<Transaction>,
 ) {
   try {
-    return await exec(c, build(), kp, `${label} attempt 1`);
+    return await exec(c, await build(), kp, `${label} attempt 1`);
   } catch (err) {
     if (!isStaleObjectVersion(err)) throw err;
     console.warn(`${label} hit stale object version; rebuilding tx`);
-    return exec(c, build(), kp, `${label} attempt 2`);
+    return exec(c, await build(), kp, `${label} attempt 2`);
   }
 }
 
@@ -257,27 +257,26 @@ async function requestRangeIntent(
     owner: string;
   },
 ) {
-  const tx = new Transaction();
-  const coin = await dusdcCoin(c, args.owner, args.dusdcType, args.escrow);
-  console.log(`using dUSDC coin ${coin} for ${args.escrow}`);
-  const [pay] = tx.splitCoins(
-    tx.object(coin),
-    [tx.pure.u64(args.escrow)],
-  );
-  tx.moveCall({
-    target: `${args.cerida}::vault::request_mint_range`,
-    typeArguments: [args.dusdcType],
-    arguments: [
-      tx.object(args.vault),
-      tx.pure.id(args.oracle),
-      tx.pure.u64(args.expiry),
-      tx.pure.u64(args.lower),
-      tx.pure.u64(args.higher),
-      tx.pure.u64(args.qty),
-      pay,
-    ],
+  const r = await execRebuiltOnStale(c, kp, 'request_mint_range', async () => {
+    const tx = new Transaction();
+    const coin = await dusdcCoin(c, args.owner, args.dusdcType, args.escrow);
+    console.log(`using dUSDC coin ${coin} for ${args.escrow}`);
+    const [pay] = tx.splitCoins(tx.object(coin), [tx.pure.u64(args.escrow)]);
+    tx.moveCall({
+      target: `${args.cerida}::vault::request_mint_range`,
+      typeArguments: [args.dusdcType],
+      arguments: [
+        tx.object(args.vault),
+        tx.pure.id(args.oracle),
+        tx.pure.u64(args.expiry),
+        tx.pure.u64(args.lower),
+        tx.pure.u64(args.higher),
+        tx.pure.u64(args.qty),
+        pay,
+      ],
+    });
+    return tx;
   });
-  const r = await exec(c, tx, kp, 'request_mint_range');
   const ev = eventPayload(r, '::vault::MintRequested');
   assert(fieldBool(ev, 'is_range') === true, 'mint request is range');
   return fieldBigInt(ev, 'intent_id');
