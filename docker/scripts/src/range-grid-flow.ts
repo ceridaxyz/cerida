@@ -65,6 +65,10 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
+function isStaleObjectVersion(err: unknown): boolean {
+  return formatError(err).includes('needs to be rebuilt because object');
+}
+
 async function exec(
   c: SuiClient,
   tx: Transaction,
@@ -92,6 +96,21 @@ async function exec(
     await c.waitForTransaction({ digest: r.digest });
   }
   return r;
+}
+
+async function execRebuiltOnStale(
+  c: SuiClient,
+  kp: Ed25519Keypair,
+  label: string,
+  build: () => Transaction,
+) {
+  try {
+    return await exec(c, build(), kp, `${label} attempt 1`);
+  } catch (err) {
+    if (!isStaleObjectVersion(err)) throw err;
+    console.warn(`${label} hit stale object version; rebuilding tx`);
+    return exec(c, build(), kp, `${label} attempt 2`);
+  }
 }
 
 function created(r: any, needle: string): string {
@@ -352,7 +371,9 @@ async function main() {
 
   console.log('── range/grid flow ──');
 
-  const create = await exec(c, createVaultTx(cerida, dusdcType), kp, 'vault::create');
+  const create = await execRebuiltOnStale(c, kp, 'vault::create', () =>
+    createVaultTx(cerida, dusdcType),
+  );
   const vault = created(create, '::vault::CeridaVault');
   const manager = created(create, '::predict_manager::PredictManager');
   console.log('vault =', vault, '\nmanager =', manager);
