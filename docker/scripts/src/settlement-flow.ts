@@ -69,16 +69,36 @@ async function exec(
   if (opts.gasBudget !== null) {
     tx.setGasBudget(opts.gasBudget ?? 2_000_000_000n);
   }
-  const r = await c.signAndExecuteTransaction({
-    transaction: tx,
-    signer: kp,
-    options: { showEffects: true, showObjectChanges: true, showEvents: true },
-  });
+  let r: TxResult;
+  try {
+    r = await c.signAndExecuteTransaction({
+      transaction: tx,
+      signer: kp,
+      options: { showEffects: true, showObjectChanges: true, showEvents: true },
+    });
+  } catch (err) {
+    throw new Error(`${label} RPC failed: ${formatError(err)}`);
+  }
   if (r.effects?.status.status !== 'success') {
     throw new Error(`${label} failed: ${JSON.stringify(r.effects?.status)}`);
   }
   await c.waitForTransaction({ digest: r.digest });
   return r;
+}
+
+function formatError(err: unknown): string {
+  if (err instanceof Error) {
+    const parts = [err.message];
+    const maybe = err as Error & { code?: unknown; type?: unknown };
+    if (maybe.code !== undefined) parts.push(`code=${String(maybe.code)}`);
+    if (maybe.type !== undefined) parts.push(`type=${String(maybe.type)}`);
+    return parts.join(' ');
+  }
+  return String(err);
+}
+
+function isStaleObjectVersion(err: unknown): boolean {
+  return formatError(err).includes('needs to be rebuilt because object');
 }
 
 function created(r: any, needle: string): string {
@@ -189,23 +209,35 @@ async function createSettlementOracle(
   const predictPkg = need(m, 'predictPkg');
   const expiry = BigInt(Date.now()) + MARKET_MS;
 
-  const tx = new Transaction();
-  tx.moveCall({
-    target: `${predictPkg}::registry::create_oracle`,
-    arguments: [
-      tx.object(need(m, 'registry')),
-      tx.object(need(m, 'predict')),
-      tx.object(need(m, 'adminCap')),
-      tx.object(need(m, 'oracleCap')),
-      tx.pure.string('BTC'),
-      tx.pure.u64(expiry),
-      tx.pure.u64(1000n * PRICE_SCALE),
-      tx.pure.u64(100n * PRICE_SCALE),
-    ],
-  });
-  const r = await exec(c, tx, kp, 'create 1 minute oracle', {
-    gasBudget: null,
-  });
+  async function submitCreateOracle(attempt: number) {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${predictPkg}::registry::create_oracle`,
+      arguments: [
+        tx.object(need(m, 'registry')),
+        tx.object(need(m, 'predict')),
+        tx.object(need(m, 'adminCap')),
+        tx.object(need(m, 'oracleCap')),
+        tx.pure.string('BTC'),
+        tx.pure.u64(expiry),
+        tx.pure.u64(1000n * PRICE_SCALE),
+        tx.pure.u64(100n * PRICE_SCALE),
+      ],
+    });
+    return exec(c, tx, kp, `create 1 minute oracle attempt ${attempt}`, {
+      gasBudget: null,
+    });
+  }
+
+  let r: TxResult;
+  try {
+    r = await submitCreateOracle(1);
+  } catch (err) {
+    if (!isStaleObjectVersion(err)) throw err;
+    console.warn('stale admin/oracle cap version; rebuilding create oracle tx');
+    await sleep(750);
+    r = await submitCreateOracle(2);
+  }
   const oracle = created(r, '::oracle::OracleSVI');
 
   const tx2 = new Transaction();
