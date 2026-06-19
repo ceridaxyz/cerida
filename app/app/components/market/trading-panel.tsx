@@ -5,53 +5,25 @@ import {
   useMotionValue,
   animate,
 } from 'framer-motion';
-import {
-  IconCheck,
-  IconChevronDown,
-  IconLock,
-  IconPlus,
-  IconSettings,
-  IconX,
-} from '@tabler/icons-react';
+import { IconChevronDown } from '@tabler/icons-react';
 
 const MIN_LEV = 1,
   MAX_LEV = 50,
   STEPS = MAX_LEV - MIN_LEV;
 const LABEL_MARKS = [1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
 const barH = (step: number) => 5 + (step / STEPS) * 27; // 5px → 32px
-const UP_PRICE = 97;
-const DOWN_PRICE = 4;
-const BALANCE = 842.36;
-
-type Direction = 'buy' | 'sell';
-type ContractSide = 'up' | 'down';
-type OrderType = 'market' | 'limit' | 'pro';
 
 function LeverageSlider({
   value,
   onChange,
-  tone,
 }: {
   value: number;
   onChange: (v: number) => void;
-  tone: 'green' | 'red' | 'violet';
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const thumbX = useMotionValue(0);
   const dragging = useRef(false);
   const [showHandle, setShowHandle] = useState(false);
-  const accent =
-    tone === 'green'
-      ? 'var(--color-bullish-green)'
-      : tone === 'red'
-        ? 'var(--color-bearish-red)'
-        : 'var(--color-brand-violet)';
-  const soft =
-    tone === 'green'
-      ? 'rgba(11,153,129,0.18)'
-      : tone === 'red'
-        ? 'rgba(242,53,70,0.18)'
-        : 'rgba(128,125,254,0.18)';
 
   const getW = () => trackRef.current?.clientWidth ?? 0;
   const levToX = (lev: number) => ((lev - MIN_LEV) / STEPS) * getW();
@@ -177,7 +149,7 @@ function LeverageSlider({
                 width: 2,
                 height: h,
                 transform: 'translateX(-1px)',
-                backgroundColor: active ? accent : 'rgba(255,255,255,0.08)',
+                backgroundColor: active ? '#9998ff' : 'rgba(255,255,255,0.08)',
                 pointerEvents: 'none',
                 transition: 'background-color 0.1s',
               }}
@@ -213,7 +185,7 @@ function LeverageSlider({
                 width: 1.5,
                 height: 5,
                 transform: 'translateX(-0.75px)',
-                backgroundColor: active ? accent : 'rgba(255,255,255,0.8)',
+                backgroundColor: active ? '#9998ff' : 'rgba(255,255,255,0.8)',
                 opacity: active ? 0.7 : 0.8,
                 pointerEvents: 'none',
               }}
@@ -262,7 +234,7 @@ function LeverageSlider({
                 bottom: 0,
                 width: 2,
                 transform: 'translateX(-1px)',
-                backgroundColor: accent,
+                backgroundColor: '#9998ff',
               }}
             />
           </motion.div>
@@ -297,7 +269,7 @@ function LeverageSlider({
                   style={{
                     width: 22,
                     height: 28,
-                    backgroundColor: soft,
+                    backgroundColor: 'rgb(201,200,255)',
                     borderRadius: 6,
                     display: 'grid',
                     gridTemplateColumns: 'repeat(2, 4px)',
@@ -305,7 +277,7 @@ function LeverageSlider({
                     gap: 2,
                     placeContent: 'center',
                     boxShadow:
-                      'rgba(0,0,0,0.25) 0px 2px 10px',
+                      'rgba(153,152,255,0.3) 0px 2px 10px, rgba(0,0,0,0.1) 0px 1px 3px',
                   }}
                 >
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -315,7 +287,7 @@ function LeverageSlider({
                         width: 4,
                         height: 4,
                         borderRadius: '50%',
-                        backgroundColor: accent,
+                        backgroundColor: 'rgb(153,152,255)',
                         opacity: 0.7,
                       }}
                     />
@@ -353,7 +325,7 @@ function LeverageSlider({
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10,
                 fontWeight: lev === value ? 600 : 500,
-                color: lev === value ? accent : 'rgba(255,255,255,0.35)',
+                color: lev === value ? '#9998ff' : 'rgba(255,255,255,0.35)',
                 padding: 0,
                 lineHeight: 1,
                 transition: 'color 0.15s',
@@ -369,461 +341,157 @@ function LeverageSlider({
 }
 
 const TradingPanel = () => {
-  const [direction, setDirection] = useState<Direction>('buy');
-  const [contractSide, setContractSide] = useState<ContractSide>('up');
-  const [orderType, setOrderType] = useState<OrderType>('market');
-  const [showProMenu, setShowProMenu] = useState(false);
+  const [direction, setDirection] = useState<'long' | 'short'>('long');
+  const [orderType, setOrderType] = useState<'market' | 'limit' | 'pro'>(
+    'market',
+  );
   const [pctSelected, setPctSelected] = useState<number | null>(null);
   const [takeProfitEnabled, setTakeProfitEnabled] = useState(false);
-  const [walkBook, setWalkBook] = useState(true);
-  const [fillKill, setFillKill] = useState(false);
-  const [leverageEnabled, setLeverageEnabled] = useState(false);
   const [leverage, setLeverage] = useState(1);
-  const [amount, setAmount] = useState('');
-  const [limitPrice, setLimitPrice] = useState(contractSide === 'up' ? UP_PRICE : DOWN_PRICE);
-  const [slip, setSlip] = useState(3);
-  const [retries, setRetries] = useState(3);
 
-  const pctOptions = [5, 20, 50];
-  const actionPrice = contractSide === 'up' ? UP_PRICE : DOWN_PRICE;
-  const sellPrice = Math.max(1, actionPrice - 2);
-  const shownCents = direction === 'buy' ? actionPrice : sellPrice;
-  const amountNum = Number(amount) || 0;
-  const shares = shownCents > 0 ? amountNum / (shownCents / 100) : 0;
-  const exposure = leverageEnabled ? amountNum * leverage : amountNum;
-  const accent =
-    leverageEnabled && direction === 'sell'
-      ? 'var(--color-bearish-red)'
-      : 'var(--color-bullish-green)';
-  const mutedAction = amountNum <= 0;
-  const directionLabels = leverageEnabled
-    ? ({ buy: 'Long', sell: 'Short' } as const)
-    : ({ buy: 'Buy', sell: 'Sell' } as const);
-  const submitLabel = `${directionLabels[direction].toUpperCase()} ${contractSide.toUpperCase()}`;
-
-  const selectPct = (pct: number) => {
-    setPctSelected(pct);
-    setAmount(((BALANCE * pct) / 100).toFixed(2));
-  };
-
-  const updateContractSide = (side: ContractSide) => {
-    setContractSide(side);
-    setLimitPrice(side === 'up' ? UP_PRICE : DOWN_PRICE);
-  };
+  const pctOptions = [10, 25, 50, 75];
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-surface-primary text-[12px]">
-      <div className="flex h-10 shrink-0 items-center border-b border-border-subtle px-3">
-        <div className="rounded-[6px] bg-surface-card px-3 py-1.5 text-[12px] font-semibold text-text-primary">
-          Execution
-        </div>
-        <button className="ml-2 flex h-7 w-7 items-center justify-center rounded-[6px] bg-surface-card text-[18px] leading-none text-text-tertiary hover:text-text-primary">
-          <IconX size={15} stroke={2.25} />
+    <div className="flex flex-col bg-surface-primary h-full min-w-0">
+      {/* LONG / SHORT toggle */}
+      <div className="flex border-b border-border-subtle shrink-0">
+        <button
+          onClick={() => setDirection('long')}
+          className={`flex-1 py-2 text-[13px] font-semibold tracking-wide transition-colors ${
+            direction === 'long'
+              ? 'bg-surface-hover text-text-primary'
+              : 'text-text-tertiary hover:text-text-secondary'
+          }`}
+        >
+          LONG
         </button>
-        <button className="ml-1 flex h-7 w-7 items-center justify-center rounded-[6px] bg-surface-card text-[18px] leading-none text-text-tertiary hover:text-text-primary">
-          <IconPlus size={15} stroke={2.25} />
+        <button
+          onClick={() => setDirection('short')}
+          className={`flex-1 py-2 text-[13px] font-semibold tracking-wide transition-colors ${
+            direction === 'short'
+              ? 'bg-surface-hover text-text-primary'
+              : 'text-text-tertiary hover:text-text-secondary'
+          }`}
+        >
+          SHORT
         </button>
       </div>
 
-      <div className="grid grid-cols-2 border-b border-border-subtle px-5">
-        {(['buy', 'sell'] as const).map((side) => (
-          <button
-            key={side}
-            onClick={() => setDirection(side)}
-            className={`relative h-12 text-left text-[15px] font-semibold transition-colors ${
-              direction === side ? 'text-text-primary' : 'text-text-quaternary hover:text-text-secondary'
-            }`}
-            style={{
-              color:
-                direction === side
-                  ? side === 'sell' && leverageEnabled
-                    ? 'var(--color-bearish-red)'
-                    : 'var(--color-bullish-green)'
-                  : undefined,
-            }}
-          >
-            {directionLabels[side]}
-            {direction === side && (
-              <span
-                className="absolute bottom-0 left-0 h-[2px] w-16 rounded-full"
-                style={{ backgroundColor: side === 'sell' && leverageEnabled ? 'var(--color-bearish-red)' : 'var(--color-bullish-green)' }}
-              />
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div className="relative flex items-center gap-0 border-b border-border-subtle px-5 py-2">
-        {(['market', 'limit'] as const).map((type) => (
+      {/* Order type tabs */}
+      <div className="flex items-center gap-0 px-3 pt-2 pb-1.5 border-b border-border-subtle shrink-0">
+        {(['market', 'limit', 'pro'] as const).map((type) => (
           <button
             key={type}
             onClick={() => setOrderType(type)}
-            className={`relative h-9 flex-1 text-[15px] font-semibold transition-colors ${
-              orderType === type ? 'text-text-primary' : 'text-text-quaternary hover:text-text-secondary'
+            className={`relative flex items-center gap-1 px-3 py-1.5 text-[14px] font-medium rounded-[5px] transition-colors ${
+              orderType === type
+                ? 'text-text-primary'
+                : 'text-text-tertiary hover:text-text-secondary'
             }`}
           >
             {type.charAt(0).toUpperCase() + type.slice(1)}
+            {type === 'limit' && (
+              <span className="px-1 py-0.5 text-[10px] font-semibold bg-brand-violet/20 text-brand-violet rounded-[3px] leading-none">
+                NEW
+              </span>
+            )}
             {orderType === type && (
-              <span className="absolute bottom-0 left-1/2 h-[2px] w-24 -translate-x-1/2 rounded-full bg-brand-violet" />
+              <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-text-primary rounded-full" />
             )}
           </button>
         ))}
-        <button
-          onClick={() => {
-            setOrderType('pro');
-            setShowProMenu((v) => !v);
-          }}
-          className={`ml-3 flex h-9 items-center gap-1 px-1 text-[15px] font-semibold transition-colors ${
-            orderType === 'pro' ? 'text-text-primary' : 'text-text-quaternary hover:text-text-secondary'
-          }`}
-        >
-          PRO
-          <IconChevronDown
-            size={14}
-            stroke={2.5}
-            className={`transition-transform ${showProMenu ? 'rotate-180' : ''}`}
-          />
-        </button>
-        <AnimatePresence>
-          {showProMenu && (
-            <motion.div
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className="absolute right-4 top-12 z-20 w-[270px] rounded-[8px] border border-border-subtle bg-surface-primary p-2 shadow-2xl"
-            >
-              {[
-                ['Trigger', 'Conditional order that arms at a target price'],
-                ['Trailing stop', 'Stop that follows the market by a fixed offset'],
-                ['CTF split', 'Convert pUSD into matched YES+NO pairs'],
-              ].map(([title, body]) => (
-                <button
-                  key={title}
-                  onClick={() => setShowProMenu(false)}
-                  className="w-full rounded-[6px] px-3 py-2 text-left hover:bg-surface-card"
-                >
-                  <div className="text-[13px] font-semibold text-text-primary">{title}</div>
-                  <div className="mt-1 text-[11px] text-text-tertiary">{body}</div>
-                </button>
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <div className="ml-auto flex items-center gap-1 text-[14px] text-text-tertiary cursor-pointer hover:text-text-secondary">
+          Pro
+          <IconChevronDown size={12} stroke={2.5} />
+        </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-5 py-4">
-        <div className="grid grid-cols-2 overflow-hidden rounded-[6px] bg-surface-card">
-          {(['up', 'down'] as const).map((side) => {
-            const active = contractSide === side;
-            const cents = side === 'up' ? UP_PRICE : DOWN_PRICE;
-            return (
-              <button
-                key={side}
-                onClick={() => updateContractSide(side)}
-                className="flex h-[58px] items-center justify-between px-6 text-[17px] font-semibold uppercase transition-colors"
-                style={{
-                  backgroundColor: active
-                    ? side === 'up'
-                      ? 'var(--color-bullish-green)'
-                      : 'var(--color-bearish-red)'
-                    : 'transparent',
-                  color: active ? '#fff' : 'var(--color-text-tertiary)',
-                }}
-              >
-                <span>{side}</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>{cents.toFixed(1)}¢</span>
-              </button>
-            );
-          })}
+      <div className="flex flex-col gap-2 px-3 py-2 flex-1 overflow-hidden">
+        {/* Margin row */}
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] text-text-secondary">Margin</span>
+          <span className="text-[13px] text-text-tertiary">
+            Bal.{' '}
+            <span
+              className="text-text-secondary"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              $8
+            </span>
+          </span>
         </div>
 
-        <div>
-          <div className="mb-2 flex items-center justify-between text-[11px] text-text-tertiary">
-            <span>0%</span>
-            <span style={{ fontFamily: 'var(--font-mono)' }}>${amountNum.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={pctSelected ?? 0}
-            onChange={(e) => selectPct(Number(e.target.value))}
-            className="w-full accent-white"
-          />
-          <div className="mt-1 grid grid-cols-4 text-center text-[10px] text-text-quaternary">
-            <span>25%</span>
-            <span>50%</span>
-            <span>75%</span>
-            <span>100%</span>
-          </div>
+        {/* Amount input */}
+        <div className="flex items-center bg-surface-primary rounded-[8px] px-3 py-1.5 border border-border-subtle gap-2">
+          <span
+            className="text-[20px] font-medium text-text-primary tracking-tight"
+            style={{ fontFamily: 'var(--font-mono)', letterSpacing: '-0.3px' }}
+          >
+            $0<span className="text-text-tertiary">.00</span>
+          </span>
+          <span className="ml-auto flex items-center justify-center px-2 py-0.5 rounded-[3px] text-[13px] font-semibold bg-brand-violet/20 text-brand-violet border border-brand-violet/30">
+            {leverage}X
+          </span>
         </div>
 
-        <div className="grid grid-cols-[repeat(4,minmax(0,1fr))_32px] gap-2">
+        {/* Percentage buttons */}
+        <div className="flex items-center gap-1.5">
           {pctOptions.map((pct) => (
             <button
               key={pct}
-              onClick={() => selectPct(pct)}
-              className={`h-10 rounded-[6px] border text-[13px] transition-colors ${
+              onClick={() => setPctSelected(pct === pctSelected ? null : pct)}
+              className={`flex-1 py-1.5 text-[13px] font-medium rounded-[5px] transition-colors ${
                 pctSelected === pct
-                  ? 'border-brand-violet bg-brand-violet/20 text-text-primary'
-                  : 'border-border-subtle bg-surface-card text-text-quaternary hover:text-text-secondary'
+                  ? 'bg-surface-hover text-text-primary'
+                  : 'bg-surface-primary text-text-tertiary hover:text-text-secondary hover:bg-surface-hover/60'
               }`}
             >
-              ${pct}
+              {pct}%
             </button>
           ))}
           <button
-            onClick={() => selectPct(100)}
-            className={`h-10 rounded-[6px] border text-[13px] transition-colors ${
+            onClick={() => setPctSelected(100)}
+            className={`flex-1 py-1.5 text-[13px] font-medium rounded-[5px] transition-colors ${
               pctSelected === 100
-                ? 'border-brand-violet bg-brand-violet/20 text-text-primary'
-                : 'border-border-subtle bg-surface-card text-text-quaternary hover:text-text-secondary'
+                ? 'bg-surface-hover text-text-primary'
+                : 'bg-surface-primary text-text-tertiary hover:text-text-secondary hover:bg-surface-hover/60'
             }`}
           >
             MAX
           </button>
-          <button className="h-10 rounded-[6px] border border-border-subtle bg-surface-card text-[17px] text-text-tertiary hover:text-text-primary">
-            <IconSettings size={17} stroke={2} className="mx-auto" />
-          </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-widest text-text-tertiary">
-              <span>Amount</span>
-              <span>${amountNum.toFixed(0)}</span>
-            </div>
-            <div className="flex h-[58px] items-center gap-3 rounded-[6px] bg-surface-card px-4">
-              <span className="text-[19px] text-text-tertiary">$</span>
-              <input
-                value={amount}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  setPctSelected(null);
-                }}
-                inputMode="decimal"
-                placeholder="0"
-                className="min-w-0 flex-1 bg-transparent text-[21px] text-text-primary outline-none placeholder:text-text-tertiary"
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </div>
-          </label>
-          <label className="block">
-            <div className="mb-2 text-[11px] uppercase tracking-widest text-text-tertiary">
-              Shares
-            </div>
-            <div className="flex h-[58px] items-center rounded-[6px] bg-surface-card px-4 text-[21px] text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-              {shares > 0 ? shares.toFixed(2) : '0'}
-            </div>
-          </label>
-        </div>
+        {/* Leverage slider */}
+        <LeverageSlider value={leverage} onChange={setLeverage} />
 
-        <div className="flex items-center justify-between rounded-[8px] border border-border-subtle bg-surface-primary px-3 py-2">
-          <div>
-            <div className="text-[11px] uppercase tracking-widest text-text-tertiary">
-              Leverage
-            </div>
-            <div className="mt-1 text-[11px] text-text-quaternary">
-              {leverageEnabled ? `${directionLabels[direction]} exposure is active` : 'Spot binary execution'}
-            </div>
-          </div>
+        {/* Take profit / Stop loss */}
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] text-text-secondary">
+            Take profit / Stop loss
+          </span>
           <button
-            onClick={() => {
-              setLeverageEnabled((v) => !v);
-              if (!leverageEnabled && leverage < 2) setLeverage(3);
-            }}
-            className={`relative h-7 w-12 rounded-full transition-colors ${
-              leverageEnabled ? 'bg-brand-violet' : 'bg-surface-hover'
+            onClick={() => setTakeProfitEnabled(!takeProfitEnabled)}
+            className={`relative w-9 h-5 rounded-full transition-colors ${
+              takeProfitEnabled ? 'bg-brand-violet' : 'bg-surface-hover'
             }`}
           >
             <span
-              className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${
-                leverageEnabled ? 'translate-x-[22px]' : 'translate-x-1'
+              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                takeProfitEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'
               }`}
             />
           </button>
         </div>
-
-        <AnimatePresence>
-          {leverageEnabled && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="overflow-hidden"
-            >
-              <LeverageSlider
-                value={leverage}
-                onChange={setLeverage}
-                tone={direction === 'sell' ? 'red' : 'green'}
-              />
-              <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-                <Metric label="Exposure" value={`$${exposure.toFixed(2)}`} />
-                <Metric label="Est. liq" value={direction === 'sell' ? '112.4¢' : '2.8¢'} />
-                <Metric label="Borrow" value="0.18%" />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {orderType === 'limit' && (
-            <motion.div
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className="rounded-[10px] border border-border-subtle bg-surface-primary p-4"
-            >
-              <div className="mb-3 text-[11px] uppercase tracking-widest text-text-tertiary">
-                Limit price
-              </div>
-              <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4">
-                <span className="text-[16px] text-brand-violet">-1%</span>
-                <button
-                  onClick={() => setLimitPrice((p) => Math.max(1, p - 1))}
-                  className="text-[22px] text-text-tertiary hover:text-text-primary"
-                >
-                  -
-                </button>
-                <span className="text-[24px] text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-                  {limitPrice}
-                  <span className="ml-2 text-[15px] text-text-tertiary">¢</span>
-                </span>
-                <button
-                  onClick={() => setLimitPrice((p) => Math.min(99, p + 1))}
-                  className="text-[22px] text-text-tertiary hover:text-text-primary"
-                >
-                  +
-                </button>
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                {['Best Bid', 'Mid', 'Best Offer'].map((label) => (
-                  <button
-                    key={label}
-                    className="h-8 rounded-[5px] bg-brand-violet/10 text-[12px] text-text-secondary hover:bg-brand-violet/20"
-                  >
-                    {label} <IconLock size={12} stroke={2} className="ml-1 inline text-text-quaternary" />
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 text-[11px] text-text-quaternary">
-                Staged locally. Keeper execution comes after limit orders ship.
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setTakeProfitEnabled(!takeProfitEnabled)}
-            className={`h-7 w-7 rounded-[6px] border transition-colors ${
-              takeProfitEnabled ? 'border-brand-violet bg-brand-violet text-white' : 'border-border-default bg-surface-primary'
-            }`}
-          >
-            {takeProfitEnabled ? <IconCheck size={16} stroke={2.5} className="mx-auto" /> : null}
-          </button>
-          <button
-            onClick={() => setTakeProfitEnabled(!takeProfitEnabled)}
-            className="border-b border-dotted border-text-tertiary text-[15px] font-semibold text-text-primary"
-          >
-            Take Profit / Stop Loss
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <ToggleLine label="Fill and Kill" checked={fillKill} onClick={() => setFillKill((v) => !v)} />
-          <ToggleLine label="Walk the Book" checked={walkBook} onClick={() => setWalkBook((v) => !v)} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Stepper label="Max Slip" suffix="¢" value={slip} setValue={setSlip} />
-          <Stepper label="Retries" value={retries} setValue={setRetries} />
-        </div>
       </div>
 
-      <div className="shrink-0 px-5 pb-5">
-        <button
-          className="h-[72px] w-full rounded-[10px] text-[17px] font-bold uppercase tracking-widest text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-          style={{
-            backgroundColor: mutedAction ? 'var(--color-surface-hover)' : accent,
-          }}
-          disabled={mutedAction}
-        >
-          {submitLabel}
-          <span className="mx-2 text-text-tertiary">-</span>
-          <span style={{ fontFamily: 'var(--font-mono)' }}>
-            {amountNum > 0 ? `$${amountNum.toFixed(2)}` : '0'}
-          </span>
+      {/* Sign in CTA */}
+      <div className="px-3 pb-3 shrink-0">
+        <button className="w-full py-2.5 bg-bullish-green text-[#1a1a1a] text-[13px] font-semibold rounded-[8px] hover:opacity-90 transition-opacity">
+          Sign in
         </button>
       </div>
     </div>
   );
 };
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[6px] bg-surface-card px-3 py-2">
-      <div className="text-[9px] uppercase tracking-widest text-text-quaternary">
-        {label}
-      </div>
-      <div className="mt-1 text-[12px] font-semibold text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function ToggleLine({ label, checked, onClick }: { label: string; checked: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="flex items-center gap-3 text-left">
-      <IconChevronDown size={17} stroke={2.25} className="text-text-tertiary" />
-      <span className="border-b border-dotted border-text-tertiary text-[14px] font-semibold text-text-primary">
-        {label}
-      </span>
-      <span
-        className={`ml-auto grid h-7 w-7 place-items-center rounded-[6px] ${
-          checked ? 'bg-brand-violet text-white' : 'border border-border-default bg-surface-primary text-transparent'
-        }`}
-      >
-        <IconCheck size={16} stroke={2.5} />
-      </span>
-    </button>
-  );
-}
-
-function Stepper({
-  label,
-  value,
-  setValue,
-  suffix = '',
-}: {
-  label: string;
-  value: number;
-  setValue: (value: number) => void;
-  suffix?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-[12px] text-text-tertiary">{label}</span>
-      <div className="flex items-center gap-4">
-        <button
-          onClick={() => setValue(Math.max(0, value - 1))}
-          className="text-[18px] text-text-tertiary hover:text-text-primary"
-        >
-          -
-        </button>
-        <span className="min-w-10 text-center text-[18px] text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-          {value}{suffix}
-        </span>
-        <button
-          onClick={() => setValue(value + 1)}
-          className="text-[18px] text-text-tertiary hover:text-text-primary"
-        >
-          +
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export default TradingPanel;
