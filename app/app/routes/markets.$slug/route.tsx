@@ -52,6 +52,9 @@ const TradingPanel = lazy(
 const RangeTrading = lazy(
   () => import('../../components/trading/range-trading'),
 );
+const PredictTrading = lazy(
+  () => import('../../components/trading/predict-trading'),
+);
 const PriceChart = lazy(() => import('../../components/market/price-chart'));
 const CryptoPrice = lazy(() => import('../../components/market/crypto-price'));
 const IvTermStructure = lazy(
@@ -103,6 +106,7 @@ type WidgetType =
   | 'flow'
   | 'iv'
   | 'trade'
+  | 'predict'
   | 'range'
   | 'positions'
   | 'panel';
@@ -187,6 +191,18 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <RangeTrading />
+      </Suspense>
+    ),
+  },
+  predict: {
+    label: 'Predict',
+    w: 10,
+    h: 6,
+    minW: 4,
+    minH: 5,
+    render: () => (
+      <Suspense fallback={<TradeSkeleton />}>
+        <PredictTrading />
       </Suspense>
     ),
   },
@@ -380,6 +396,7 @@ const INITIAL_ITEMS: Item[] = [
   one('flow', 'flow'),
   one('trade', 'trade'),
   one('range', 'range'),
+  one('predict', 'predict'),
   one('iv', 'iv'),
 ];
 
@@ -389,7 +406,8 @@ const INITIAL_LAYOUT: Layout = [
   { i: 'flow', x: 13, y: 0, w: 6, h: 8, minW: 4, minH: 4 },
   { i: 'trade', x: 19, y: 0, w: 5, h: 6, minW: 4, minH: 3 },
   { i: 'range', x: 19, y: 5, w: 5, h: 6, minW: 4, minH: 5 },
-  { i: 'iv', x: 4, y: 8, w: 15, h: 4, minW: 6, minH: 3 },
+  { i: 'predict', x: 0, y: 8, w: 10, h: 6, minW: 4, minH: 5 },
+  { i: 'iv', x: 10, y: 8, w: 9, h: 4, minW: 6, minH: 3 },
 ];
 
 // ── Page ───────────────────────────────────────────────────────────────────────
