@@ -17,6 +17,9 @@ export default function PredictTrading({
 
   const [betSide, setBetSide] = useState<'up' | 'down'>('up');
   const [amountRaw, setAmountRaw] = useState('100');
+  const [isUpHovered, setIsUpHovered] = useState(false);
+  const [isDownHovered, setIsDownHovered] = useState(false);
+  const [isSubmitHovered, setIsSubmitHovered] = useState(false);
 
   // Simulation: Random walk for spot price
   useEffect(() => {
@@ -84,27 +87,41 @@ export default function PredictTrading({
             {/* UP CHEVRON BUTTON */}
             <button
               onClick={() => setBetSide('up')}
+              onMouseEnter={() => setIsUpHovered(true)}
+              onMouseLeave={() => setIsUpHovered(false)}
               className="relative w-full overflow-hidden focus:outline-none cursor-pointer transition-all duration-300 animate-none rounded-[12px]"
               style={{ 
                 height: '66px',
-                filter: betSide === 'up' ? 'drop-shadow(0 0 8px rgba(11, 153, 129, 0.25))' : 'none'
+                filter: betSide === 'up' 
+                  ? 'drop-shadow(0 0 12px rgba(11, 153, 129, 0.35))' 
+                  : (isUpHovered ? 'drop-shadow(0 0 8px rgba(11, 153, 129, 0.12))' : 'none')
               }}
             >
               <svg viewBox="0 0 200 66" className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="upActiveGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="#0dbe9a" />
+                    <stop offset="100%" stopColor="#0b9981" />
+                  </linearGradient>
+                  <linearGradient id="inactiveGradUp" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="rgba(30, 32, 50, 0.75)" />
+                    <stop offset="100%" stopColor="rgba(13, 15, 26, 0.75)" />
+                  </linearGradient>
+                </defs>
                 <path 
                   d="M 15,61 Q 5,61 5,51 L 5,28 Q 5,21 10,18 L 90,3 Q 100,0 110,3 L 190,18 Q 195,21 195,28 L 195,51 Q 195,61 185,61 Z" 
-                  fill={betSide === 'up' ? '#0b9981' : 'rgba(13, 15, 26, 0.7)'} 
-                  stroke={betSide === 'up' ? '#0b9981' : 'rgba(255, 255, 255, 0.08)'}
-                  strokeWidth={betSide === 'up' ? 2 : 1}
+                  fill={betSide === 'up' ? 'url(#upActiveGrad)' : 'url(#inactiveGradUp)'} 
+                  stroke={betSide === 'up' ? '#0dbe9a' : (isUpHovered ? 'rgba(13, 190, 154, 0.45)' : 'rgba(255, 255, 255, 0.08)')}
+                  strokeWidth={betSide === 'up' ? 2 : (isUpHovered ? 1.5 : 1)}
                   className="transition-all duration-300"
                 />
               </svg>
               {/* Overlay text exactly matching the uploaded image */}
               <div className="absolute inset-0 flex flex-col justify-center items-center pointer-events-none pt-1">
-                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#1a1a1a]' : 'text-text-primary'}`}>
+                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#1a1a1a]' : 'text-text-primary'} transition-colors duration-300`}>
                   Up
                 </span>
-                <span className={`text-[12px] font-bold ${betSide === 'up' ? 'text-[#1a1a1a]' : 'text-text-tertiary'}`} style={mono}>
+                <span className={`text-[12px] font-bold ${betSide === 'up' ? 'text-[#1a1a1a]' : 'text-text-tertiary'} transition-colors duration-300`} style={mono}>
                   {upCents}¢ · {upMultiplier.toFixed(2)}x
                 </span>
               </div>
@@ -113,27 +130,41 @@ export default function PredictTrading({
             {/* DOWN CHEVRON BUTTON */}
             <button
               onClick={() => setBetSide('down')}
+              onMouseEnter={() => setIsDownHovered(true)}
+              onMouseLeave={() => setIsDownHovered(false)}
               className="relative w-full overflow-hidden focus:outline-none cursor-pointer transition-all duration-300 animate-none rounded-[12px]"
               style={{ 
                 height: '66px',
-                filter: betSide === 'down' ? 'drop-shadow(0 0 8px rgba(242, 53, 70, 0.25))' : 'none'
+                filter: betSide === 'down' 
+                  ? 'drop-shadow(0 0 12px rgba(242, 53, 70, 0.35))' 
+                  : (isDownHovered ? 'drop-shadow(0 0 8px rgba(242, 53, 70, 0.12))' : 'none')
               }}
             >
               <svg viewBox="0 0 200 66" className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="downActiveGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="#ff4a5a" />
+                    <stop offset="100%" stopColor="#f23546" />
+                  </linearGradient>
+                  <linearGradient id="inactiveGradDown" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="rgba(30, 32, 50, 0.75)" />
+                    <stop offset="100%" stopColor="rgba(13, 15, 26, 0.75)" />
+                  </linearGradient>
+                </defs>
                 <path 
                   d="M 15,5 Q 5,5 5,15 L 5,38 Q 5,45 10,48 L 90,63 Q 100,66 110,63 L 190,48 Q 195,45 195,38 L 195,15 Q 195,5 185,5 Z" 
-                  fill={betSide === 'down' ? '#f23546' : 'rgba(13, 15, 26, 0.7)'} 
-                  stroke={betSide === 'down' ? '#f23546' : 'rgba(255, 255, 255, 0.08)'}
-                  strokeWidth={betSide === 'down' ? 2 : 1}
+                  fill={betSide === 'down' ? 'url(#downActiveGrad)' : 'url(#inactiveGradDown)'} 
+                  stroke={betSide === 'down' ? '#ff4a5a' : (isDownHovered ? 'rgba(255, 74, 90, 0.45)' : 'rgba(255, 255, 255, 0.08)')}
+                  strokeWidth={betSide === 'down' ? 2 : (isDownHovered ? 1.5 : 1)}
                   className="transition-all duration-300"
                 />
               </svg>
               {/* Overlay text exactly matching the uploaded image */}
               <div className="absolute inset-0 flex flex-col justify-center items-center pointer-events-none pb-1.5">
-                <span className={`text-[12px] font-bold ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-tertiary'}`} style={mono}>
+                <span className={`text-[12px] font-bold ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-tertiary'} transition-colors duration-300`} style={mono}>
                   {downMultiplier.toFixed(2)}x · {downCents}¢
                 </span>
-                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-primary'}`}>
+                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-primary'} transition-colors duration-300`}>
                   Down
                 </span>
               </div>
@@ -213,21 +244,40 @@ export default function PredictTrading({
           <button
             onClick={() => handleConfirm(betSide)}
             disabled={!canSubmit}
-            className="w-full py-2.5 font-bold rounded-[8px] text-[13px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
-            style={{
-              backgroundColor: canSubmit
-                ? (betSide === 'up' ? 'var(--color-bullish-green)' : 'var(--color-bearish-red)')
-                : 'var(--color-surface-hover)',
-              color: canSubmit 
-                ? (betSide === 'up' ? '#1a1a1a' : '#ffffff') 
-                : 'var(--color-text-quaternary)',
-            }}
+            onMouseEnter={() => setIsSubmitHovered(true)}
+            onMouseLeave={() => setIsSubmitHovered(false)}
+            className={`w-full py-2.5 font-bold rounded-[8px] text-[13px] tracking-wide uppercase transition-all duration-300 flex flex-col items-center justify-center border ${
+              canSubmit ? 'cursor-pointer' : 'cursor-not-allowed'
+            }`}
+            style={
+              canSubmit
+                ? {
+                    background: betSide === 'up'
+                      ? 'linear-gradient(135deg, #0dbe9a 0%, #0b9981 100%)'
+                      : 'linear-gradient(135deg, #ff4a5a 0%, #f23546 100%)',
+                    color: betSide === 'up' ? '#1a1a1a' : '#ffffff',
+                    borderColor: betSide === 'up' ? '#0dbe9a' : '#ff4a5a',
+                    boxShadow: betSide === 'up'
+                      ? (isSubmitHovered
+                          ? '0 6px 20px rgba(11, 153, 129, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.4)'
+                          : '0 4px 14px rgba(11, 153, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.35)')
+                      : (isSubmitHovered
+                          ? '0 6px 20px rgba(242, 53, 70, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.4)'
+                          : '0 4px 14px rgba(242, 53, 70, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.35)'),
+                  }
+                : {
+                    background: 'rgba(21, 23, 42, 0.6)',
+                    color: 'var(--color-text-quaternary)',
+                    borderColor: 'rgba(255, 255, 255, 0.05)',
+                    boxShadow: 'none',
+                  }
+            }
           >
             <span className="font-extrabold tracking-wide">
               Buy {betSide === 'up' ? 'UP' : 'DOWN'} · {activeMultiplier.toFixed(2)}x
             </span>
             {amount > 0 && (
-              <span className="text-[11px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
+              <span className={`text-[11px] font-semibold mt-0.5 normal-case ${betSide === 'up' ? 'text-black/80' : 'text-white/95'}`} style={mono}>
                 Bet ${amount.toFixed(0)} to win ${(amount * activeMultiplier).toFixed(2)}
               </span>
             )}
