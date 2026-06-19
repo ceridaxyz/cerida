@@ -87,24 +87,24 @@ export default function PredictTrading({
               className="relative w-full overflow-hidden focus:outline-none cursor-pointer transition-all duration-300 animate-none rounded-[12px]"
               style={{ 
                 height: '66px',
-                filter: betSide === 'up' ? 'drop-shadow(0 0 8px rgba(28, 191, 167, 0.25))' : 'none'
+                filter: betSide === 'up' ? 'drop-shadow(0 0 8px rgba(24, 166, 146, 0.2))' : 'none'
               }}
             >
               <svg viewBox="0 0 200 66" className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
                 <path 
                   d="M 15,61 Q 5,61 5,51 L 5,28 Q 5,21 10,18 L 90,3 Q 100,0 110,3 L 190,18 Q 195,21 195,28 L 195,51 Q 195,61 185,61 Z" 
-                  fill={betSide === 'up' ? '#1cbfa7' : 'rgba(13, 15, 26, 0.7)'} 
-                  stroke={betSide === 'up' ? '#1cbfa7' : 'rgba(255, 255, 255, 0.08)'}
+                  fill={betSide === 'up' ? '#18a692' : 'rgba(13, 15, 26, 0.7)'} 
+                  stroke={betSide === 'up' ? '#18a692' : 'rgba(255, 255, 255, 0.08)'}
                   strokeWidth={betSide === 'up' ? 2 : 1}
                   className="transition-all duration-300"
                 />
               </svg>
               {/* Overlay text exactly matching the uploaded image */}
               <div className="absolute inset-0 flex flex-col justify-center items-center pointer-events-none pt-1">
-                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-primary'}`}>
+                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#ffffff]' : 'text-text-primary'}`}>
                   Up
                 </span>
-                <span className={`text-[12px] font-bold ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-tertiary'}`} style={mono}>
+                <span className={`text-[12px] font-bold ${betSide === 'up' ? 'text-[#ffffff]' : 'text-text-tertiary'}`} style={mono}>
                   {upCents}¢ · {upMultiplier.toFixed(2)}x
                 </span>
               </div>
@@ -116,14 +116,14 @@ export default function PredictTrading({
               className="relative w-full overflow-hidden focus:outline-none cursor-pointer transition-all duration-300 animate-none rounded-[12px]"
               style={{ 
                 height: '66px',
-                filter: betSide === 'down' ? 'drop-shadow(0 0 8px rgba(217, 60, 86, 0.25))' : 'none'
+                filter: betSide === 'down' ? 'drop-shadow(0 0 8px rgba(184, 53, 76, 0.2))' : 'none'
               }}
             >
               <svg viewBox="0 0 200 66" className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
                 <path 
                   d="M 15,5 Q 5,5 5,15 L 5,38 Q 5,45 10,48 L 90,63 Q 100,66 110,63 L 190,48 Q 195,45 195,38 L 195,15 Q 195,5 185,5 Z" 
-                  fill={betSide === 'down' ? '#d93c56' : 'rgba(13, 15, 26, 0.7)'} 
-                  stroke={betSide === 'down' ? '#d93c56' : 'rgba(255, 255, 255, 0.08)'}
+                  fill={betSide === 'down' ? '#b8354c' : 'rgba(13, 15, 26, 0.7)'} 
+                  stroke={betSide === 'down' ? '#b8354c' : 'rgba(255, 255, 255, 0.08)'}
                   strokeWidth={betSide === 'down' ? 2 : 1}
                   className="transition-all duration-300"
                 />
@@ -216,11 +216,9 @@ export default function PredictTrading({
             className="w-full py-2.5 font-bold rounded-[8px] text-[13px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
             style={{
               backgroundColor: canSubmit
-                ? (betSide === 'up' ? '#1cbfa7' : '#d93c56')
+                ? (betSide === 'up' ? '#18a692' : '#b8354c')
                 : 'var(--color-surface-hover)',
-              color: canSubmit 
-                ? (betSide === 'up' ? '#060a0f' : '#ffffff') 
-                : 'var(--color-text-quaternary)',
+              color: canSubmit ? '#ffffff' : 'var(--color-text-quaternary)',
             }}
           >
             <span className="font-extrabold tracking-wide">
