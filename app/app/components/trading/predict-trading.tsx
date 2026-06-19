@@ -60,10 +60,25 @@ export default function PredictTrading({
   const mono = { fontFamily: "var(--font-mono)" };
 
   return (
-    <div className="flex flex-col h-full bg-surface-primary text-[12px] overflow-hidden select-none" style={sans}>
+    <div className="relative flex flex-col h-full bg-[#0a0a12]/45 backdrop-blur-xl text-[12px] overflow-hidden select-none" style={{ ...sans, backdropFilter: 'blur(20px)' }}>
       
+      {/* Background radial glow for glassmorphic depth */}
+      <div 
+        className="absolute pointer-events-none rounded-full blur-[80px] opacity-[0.14] transition-all duration-700 z-0"
+        style={{
+          width: '260px',
+          height: '260px',
+          top: '10px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: betSide === 'up' 
+            ? 'radial-gradient(circle, #0dbe9a 0%, transparent 70%)' 
+            : 'radial-gradient(circle, #ff4a5a 0%, transparent 70%)',
+        }}
+      />
+
       {/* Title Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 bg-white/[0.02] backdrop-blur-md border-b border-white/[0.04] shrink-0 z-10">
         <div className="flex items-center gap-1.5">
           <span className="text-text-secondary font-bold text-[14px]">{underlying} Predict</span>
           <span className={`${spot >= roundStartPrice ? 'text-bullish-green' : 'text-bearish-red'} font-extrabold text-[14px]`} style={mono}>
@@ -71,14 +86,14 @@ export default function PredictTrading({
           </span>
         </div>
         <div className="flex items-center gap-1 text-text-quaternary font-bold text-[12px]" style={mono}>
-          <span className="bg-surface-hover px-1.5 py-0.5 rounded text-[11px] text-text-tertiary font-bold">
+          <span className="bg-white/[0.03] px-1.5 py-0.5 rounded text-[11px] text-text-tertiary font-bold border border-white/[0.03]">
             Round #{roundId}
           </span>
         </div>
       </div>
 
       {/* Main compact ticket layout */}
-      <div className="flex flex-col flex-1 p-2.5 justify-between min-h-0 overflow-y-auto gap-2">
+      <div className="flex flex-col flex-1 p-2.5 justify-between min-h-0 overflow-y-auto gap-2 z-10">
         
         <div className="flex flex-col gap-2">
           
@@ -104,8 +119,8 @@ export default function PredictTrading({
                     <stop offset="100%" stopColor="#0b9981" />
                   </linearGradient>
                   <linearGradient id="inactiveGradUp" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stopColor="rgba(30, 32, 50, 0.75)" />
-                    <stop offset="100%" stopColor="rgba(13, 15, 26, 0.75)" />
+                    <stop offset="0%" stopColor="rgba(25, 27, 45, 0.45)" />
+                    <stop offset="100%" stopColor="rgba(10, 11, 20, 0.45)" />
                   </linearGradient>
                 </defs>
                 <path 
@@ -147,8 +162,8 @@ export default function PredictTrading({
                     <stop offset="100%" stopColor="#f23546" />
                   </linearGradient>
                   <linearGradient id="inactiveGradDown" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stopColor="rgba(30, 32, 50, 0.75)" />
-                    <stop offset="100%" stopColor="rgba(13, 15, 26, 0.75)" />
+                    <stop offset="0%" stopColor="rgba(25, 27, 45, 0.45)" />
+                    <stop offset="100%" stopColor="rgba(10, 11, 20, 0.45)" />
                   </linearGradient>
                 </defs>
                 <path 
@@ -171,13 +186,13 @@ export default function PredictTrading({
             </button>
           </div>
 
-          {/* Compact Pricing Details Box */}
-          <div className="grid grid-cols-3 gap-1 p-2 rounded-[8px] bg-[#0c0d16] border border-border-subtle text-center text-[11px]">
+          {/* Compact Pricing Details Box (Glassmorphic) */}
+          <div className="grid grid-cols-3 gap-1 p-2 rounded-[8px] bg-white/[0.02] backdrop-blur-md border border-white/[0.04] text-center text-[11px] shadow-[inset_0_1px_1px_rgba(255,255,255,0.01)]">
             <div className="flex flex-col">
               <span className="text-text-quaternary font-bold text-[10px]">LOCKED</span>
               <span className="text-text-secondary font-semibold text-[13px] mt-0.5" style={mono}>${roundStartPrice.toFixed(1)}</span>
             </div>
-            <div className="flex flex-col border-x border-border-subtle/50">
+            <div className="flex flex-col border-x border-white/[0.04]">
               <span className="text-text-quaternary font-bold text-[10px]">SPOT</span>
               <span className={`font-bold text-[13px] mt-0.5 ${spot >= roundStartPrice ? 'text-bullish-green' : 'text-bearish-red'}`} style={mono}>
                 ${spot.toFixed(2)}
@@ -200,8 +215,8 @@ export default function PredictTrading({
               </span>
             </div>
 
-            {/* Input field */}
-            <div className="flex items-center bg-[#0c0d16] rounded-[6px] px-2 py-1.5 border border-border-subtle gap-1.5 focus-within:border-brand-violet">
+            {/* Input field (Glassmorphic) */}
+            <div className="flex items-center bg-white/[0.02] backdrop-blur-md rounded-[6px] px-2 py-1.5 border border-white/[0.05] gap-1.5 focus-within:border-brand-violet/50 focus-within:bg-white/[0.04] transition-all duration-300">
               <span className="text-text-quaternary font-extrabold text-[15px]">$</span>
               <input
                 type="number"
@@ -211,25 +226,25 @@ export default function PredictTrading({
                 className="flex-1 bg-transparent text-[16px] text-text-primary outline-none font-bold placeholder:text-text-quaternary"
                 style={mono}
               />
-              <span className="text-[10px] px-1 py-0.5 rounded bg-surface-hover text-text-tertiary border border-border-subtle uppercase font-bold" style={mono}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-text-tertiary border border-white/[0.05] uppercase font-bold" style={mono}>
                 USDT
               </span>
             </div>
 
-            {/* Quick shortcuts */}
+            {/* Quick shortcuts (Glassmorphic) */}
             <div className="grid grid-cols-5 gap-1 mt-1">
               {[10, 25, 50, 75].map((pct) => (
                 <button
                   key={pct}
                   onClick={() => selectPct(pct)}
-                  className="py-1 rounded bg-[#0c0d16] border border-border-subtle hover:bg-surface-hover text-[11px] text-text-tertiary hover:text-text-secondary cursor-pointer transition-colors"
+                  className="py-1 rounded bg-white/[0.02] backdrop-blur-sm border border-white/[0.04] hover:bg-white/[0.07] hover:border-white/[0.08] text-[11px] text-text-tertiary hover:text-text-secondary cursor-pointer transition-all duration-200"
                 >
                   {pct}%
                 </button>
               ))}
               <button
                 onClick={() => selectPct(100)}
-                className="py-1 rounded bg-[#0c0d16] border border-border-subtle hover:bg-surface-hover text-[11px] font-bold text-brand-violet cursor-pointer transition-colors"
+                className="py-1 rounded bg-white/[0.03] backdrop-blur-sm border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/[0.1] text-[11px] font-bold text-brand-violet cursor-pointer transition-all duration-200"
               >
                 MAX
               </button>
@@ -266,9 +281,9 @@ export default function PredictTrading({
                           : '0 4px 14px rgba(242, 53, 70, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.35)'),
                   }
                 : {
-                    background: 'rgba(21, 23, 42, 0.6)',
+                    background: 'rgba(255, 255, 255, 0.02)',
                     color: 'var(--color-text-quaternary)',
-                    borderColor: 'rgba(255, 255, 255, 0.05)',
+                    borderColor: 'rgba(255, 255, 255, 0.04)',
                     boxShadow: 'none',
                   }
             }
