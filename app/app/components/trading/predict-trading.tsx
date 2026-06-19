@@ -1,18 +1,4 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  IconArrowUp,
-  IconArrowDown,
-  IconCheck,
-} from '@tabler/icons-react';
-
-interface Bet {
-  roundId: number;
-  side: 'up' | 'down';
-  amount: number;
-  multiplier: number;
-  status: 'pending' | 'won' | 'lost';
-}
 
 const INITIAL_BALANCE = 903.44;
 
@@ -23,18 +9,14 @@ export default function PredictTrading({
   currentPrice?: number;
   underlying?: string;
 }) {
-  // Timer & price states
+  // Price states
   const [spot, setSpot] = useState(currentPrice);
-  const [roundStartPrice, setRoundStartPrice] = useState(1354.00);
-  const [timeLeft, setTimeLeft] = useState(282); // 4m 42s
-  const [balance, setBalance] = useState(INITIAL_BALANCE);
-  const [roundId, setRoundId] = useState(325);
+  const [roundStartPrice] = useState(1354.00);
+  const [balance] = useState(INITIAL_BALANCE);
+  const [roundId] = useState(325);
 
   const [betSide, setBetSide] = useState<'up' | 'down'>('up');
   const [amountRaw, setAmountRaw] = useState('100');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [txSuccess, setTxSuccess] = useState(false);
-  const [myBets, setMyBets] = useState<Bet[]>([]);
 
   // Simulation: Random walk for spot price
   useEffect(() => {
@@ -54,42 +36,9 @@ export default function PredictTrading({
   const upMultiplier = parseFloat((1.0 / upRatio).toFixed(2));
   const downMultiplier = parseFloat((1.0 / (1.0 - upRatio)).toFixed(2));
 
-  // Timer & Rollover
-  useEffect(() => {
-    const id = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          // Rollover
-          setRoundId((r) => r + 1);
-          setRoundStartPrice(spot);
-          
-          // Settle pending bets
-          setMyBets((prevBets) =>
-            prevBets.map((b) => {
-              if (b.roundId === roundId && b.status === 'pending') {
-                const won = b.side === (spot >= roundStartPrice ? 'up' : 'down');
-                if (won) {
-                  setBalance((bal) => parseFloat((bal + b.amount * b.multiplier).toFixed(2)));
-                }
-                return { ...b, status: won ? 'won' : 'lost' };
-              }
-              return b;
-            })
-          );
-          
-          return 300; // Reset to 5m
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [spot, roundId, roundStartPrice]);
-
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
+  // Option cents prices derived from multipliers (probability representation)
+  const upCents = ((1.0 / upMultiplier) * 100).toFixed(1);
+  const downCents = ((1.0 / downMultiplier) * 100).toFixed(1);
 
   const amount = parseFloat(amountRaw) || 0;
   const activeMultiplier = betSide === 'up' ? upMultiplier : downMultiplier;
@@ -99,33 +48,13 @@ export default function PredictTrading({
     setAmountRaw(((balance * pct) / 100).toFixed(2));
   };
 
-  const handleConfirm = () => {
-    if (!canSubmit) return;
-    setIsSubmitting(true);
-    setTxSuccess(false);
-
-    setTimeout(() => {
-      setBalance((prev) => parseFloat((prev - amount).toFixed(2)));
-      const newBet: Bet = {
-        roundId: roundId,
-        side: betSide,
-        amount: amount,
-        multiplier: activeMultiplier,
-        status: 'pending',
-      };
-      setMyBets((prev) => [newBet, ...prev]);
-      setIsSubmitting(false);
-      setTxSuccess(true);
-
-      setTimeout(() => setTxSuccess(false), 3000);
-    }, 1000);
+  const handleConfirm = (side: 'up' | 'down') => {
+    // Stub: do nothing yet
   };
 
   // Typography helpers (follow design system in trade)
   const sans = { fontFamily: "'Manrope', system-ui, -apple-system, sans-serif" };
   const mono = { fontFamily: "var(--font-mono)" };
-
-  const estPayout = amount * activeMultiplier;
 
   return (
     <div className="flex flex-col h-full bg-surface-primary text-[11px] overflow-hidden select-none" style={sans}>
@@ -139,10 +68,9 @@ export default function PredictTrading({
           </span>
         </div>
         <div className="flex items-center gap-1 text-text-quaternary font-bold text-[11px]" style={mono}>
-          <span className="bg-surface-hover px-1 py-0.5 rounded text-[9px] text-text-tertiary">
-            #{roundId}
+          <span className="bg-surface-hover px-1 py-0.5 rounded text-[9px] text-text-tertiary font-bold">
+            Round #{roundId}
           </span>
-          <span className="text-brand-violet">{formatTime(timeLeft)}</span>
         </div>
       </div>
 
@@ -176,8 +104,8 @@ export default function PredictTrading({
                 <span className={`text-[13px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-primary'}`}>
                   Up
                 </span>
-                <span className={`text-[11px] font-bold ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-tertiary'}`} style={mono}>
-                  {upMultiplier.toFixed(2)}x
+                <span className={`text-[10px] font-bold ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-tertiary'}`} style={mono}>
+                  {upCents}¢ · {upMultiplier.toFixed(2)}x
                 </span>
               </div>
             </button>
@@ -202,8 +130,8 @@ export default function PredictTrading({
               </svg>
               {/* Overlay text exactly matching the uploaded image */}
               <div className="absolute inset-0 flex flex-col justify-center items-center pointer-events-none pb-1.5">
-                <span className={`text-[11px] font-bold ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-tertiary'}`} style={mono}>
-                  {downMultiplier.toFixed(2)}x
+                <span className={`text-[10px] font-bold ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-tertiary'}`} style={mono}>
+                  {downMultiplier.toFixed(2)}x · {downCents}¢
                 </span>
                 <span className={`text-[13px] font-extrabold tracking-wide ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-primary'}`}>
                   Down
@@ -278,56 +206,50 @@ export default function PredictTrading({
         </div>
 
         {/* Submit Block */}
-        <div className="flex flex-col gap-1.5 mt-2">
-          
-          {/* Submit Button */}
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          {/* Buy UP Button */}
           <button
-            onClick={handleConfirm}
-            disabled={!canSubmit || isSubmitting}
-            className="w-full py-2.5 font-bold rounded-[8px] text-[11px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
+            onClick={() => handleConfirm('up')}
+            disabled={!canSubmit}
+            className="w-full py-2.5 font-bold rounded-[8px] text-[10px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
             style={{
               backgroundColor: canSubmit
-                ? (betSide === 'up' ? 'var(--color-bullish-green)' : 'var(--color-bearish-red)')
+                ? 'var(--color-bullish-green)'
                 : 'var(--color-surface-hover)',
               color: canSubmit ? '#ffffff' : 'var(--color-text-quaternary)',
             }}
           >
-            {isSubmitting ? (
-              <div className="flex items-center gap-1.5">
-                <svg className="animate-spin h-3 w-3 text-current" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                SUBMITTING...
-              </div>
-            ) : (
-              <>
-                <span className="font-extrabold tracking-wide">
-                  CONFIRM PREDICT {betSide.toUpperCase()}
-                </span>
-                {amount > 0 && (
-                  <span className="text-[9px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
-                    Bet ${amount.toFixed(0)} to win ${estPayout.toFixed(2)}
-                  </span>
-                )}
-              </>
+            <span className="font-extrabold tracking-wide">
+              Buy UP · {upMultiplier.toFixed(2)}x
+            </span>
+            {amount > 0 && (
+              <span className="text-[8px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
+                Bet ${amount.toFixed(0)} to win ${(amount * upMultiplier).toFixed(2)}
+              </span>
             )}
           </button>
 
-          {/* Feedback banner */}
-          <AnimatePresence>
-            {txSuccess && (
-              <motion.div
-                initial={{ opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="p-2 rounded-[5px] bg-bullish-green/10 border border-bullish-green/20 text-bullish-green text-[9px] text-center flex items-center justify-center gap-1"
-              >
-                <IconCheck size={11} stroke={3.5} />
-                <span>Prediction placed successfully!</span>
-              </motion.div>
+          {/* Buy DOWN Button */}
+          <button
+            onClick={() => handleConfirm('down')}
+            disabled={!canSubmit}
+            className="w-full py-2.5 font-bold rounded-[8px] text-[10px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
+            style={{
+              backgroundColor: canSubmit
+                ? 'var(--color-bearish-red)'
+                : 'var(--color-surface-hover)',
+              color: canSubmit ? '#ffffff' : 'var(--color-text-quaternary)',
+            }}
+          >
+            <span className="font-extrabold tracking-wide">
+              Buy DOWN · {downMultiplier.toFixed(2)}x
+            </span>
+            {amount > 0 && (
+              <span className="text-[8px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
+                Bet ${amount.toFixed(0)} to win ${(amount * downMultiplier).toFixed(2)}
+              </span>
             )}
-          </AnimatePresence>
+          </button>
         </div>
 
       </div>
