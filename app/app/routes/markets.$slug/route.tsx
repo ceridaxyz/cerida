@@ -136,10 +136,10 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
   },
   crypto: {
     label: 'Crypto Price',
-    w: 6,
-    h: 8,
-    minW: 3,
-    minH: 3,
+    w: 5,
+    h: 6,
+    minW: 4,
+    minH: 5,
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <CryptoPrice />
@@ -196,10 +196,10 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
   },
   predict: {
     label: 'Predict',
-    w: 4,
+    w: 5,
     h: 6,
-    minW: 2,
-    minH: 3,
+    minW: 4,
+    minH: 5,
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <PredictTrading />
@@ -401,13 +401,13 @@ const INITIAL_ITEMS: Item[] = [
 ];
 
 const INITIAL_LAYOUT: Layout = [
-  { i: 'crypto', x: 0, y: 0, w: 4, h: 6, minW: 3, minH: 3 },
-  { i: 'chart', x: 4, y: 0, w: 9, h: 8, minW: 4, minH: 3 },
-  { i: 'flow', x: 13, y: 0, w: 6, h: 8, minW: 4, minH: 4 },
+  { i: 'crypto', x: 0, y: 0, w: 5, h: 6, minW: 4, minH: 5 },
+  { i: 'chart', x: 5, y: 0, w: 9, h: 8, minW: 4, minH: 3 },
+  { i: 'flow', x: 14, y: 0, w: 5, h: 8, minW: 4, minH: 4 },
   { i: 'trade', x: 19, y: 0, w: 5, h: 6, minW: 4, minH: 3 },
   { i: 'range', x: 19, y: 5, w: 5, h: 6, minW: 4, minH: 5 },
-  { i: 'predict', x: 0, y: 8, w: 4, h: 6, minW: 2, minH: 3 },
-  { i: 'iv', x: 4, y: 8, w: 15, h: 4, minW: 6, minH: 3 },
+  { i: 'predict', x: 0, y: 8, w: 5, h: 6, minW: 4, minH: 5 },
+  { i: 'iv', x: 5, y: 8, w: 14, h: 4, minW: 6, minH: 3 },
 ];
 
 // ── Page ───────────────────────────────────────────────────────────────────────

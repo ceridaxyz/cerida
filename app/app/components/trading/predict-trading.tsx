@@ -57,18 +57,18 @@ export default function PredictTrading({
   const mono = { fontFamily: "var(--font-mono)" };
 
   return (
-    <div className="flex flex-col h-full bg-surface-primary text-[11px] overflow-hidden select-none" style={sans}>
+    <div className="flex flex-col h-full bg-surface-primary text-[12px] overflow-hidden select-none" style={sans}>
       
       {/* Title Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle shrink-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-text-secondary font-bold text-[12px]">{underlying} Predict</span>
-          <span className="text-bullish-green font-extrabold text-[12px]" style={mono}>
+          <span className="text-text-secondary font-bold text-[14px]">{underlying} Predict</span>
+          <span className="text-bullish-green font-extrabold text-[14px]" style={mono}>
             ${spot.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </span>
         </div>
-        <div className="flex items-center gap-1 text-text-quaternary font-bold text-[11px]" style={mono}>
-          <span className="bg-surface-hover px-1 py-0.5 rounded text-[9px] text-text-tertiary font-bold">
+        <div className="flex items-center gap-1 text-text-quaternary font-bold text-[12px]" style={mono}>
+          <span className="bg-surface-hover px-1.5 py-0.5 rounded text-[11px] text-text-tertiary font-bold">
             Round #{roundId}
           </span>
         </div>
@@ -101,10 +101,10 @@ export default function PredictTrading({
               </svg>
               {/* Overlay text exactly matching the uploaded image */}
               <div className="absolute inset-0 flex flex-col justify-center items-center pointer-events-none pt-1">
-                <span className={`text-[13px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-primary'}`}>
+                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-primary'}`}>
                   Up
                 </span>
-                <span className={`text-[10px] font-bold ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-tertiary'}`} style={mono}>
+                <span className={`text-[12px] font-bold ${betSide === 'up' ? 'text-[#060a0f]' : 'text-text-tertiary'}`} style={mono}>
                   {upCents}¢ · {upMultiplier.toFixed(2)}x
                 </span>
               </div>
@@ -130,10 +130,10 @@ export default function PredictTrading({
               </svg>
               {/* Overlay text exactly matching the uploaded image */}
               <div className="absolute inset-0 flex flex-col justify-center items-center pointer-events-none pb-1.5">
-                <span className={`text-[10px] font-bold ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-tertiary'}`} style={mono}>
+                <span className={`text-[12px] font-bold ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-tertiary'}`} style={mono}>
                   {downMultiplier.toFixed(2)}x · {downCents}¢
                 </span>
-                <span className={`text-[13px] font-extrabold tracking-wide ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-primary'}`}>
+                <span className={`text-[16px] font-extrabold tracking-wide ${betSide === 'down' ? 'text-[#ffffff]' : 'text-text-primary'}`}>
                   Down
                 </span>
               </div>
@@ -141,18 +141,18 @@ export default function PredictTrading({
           </div>
 
           {/* Compact Pricing Details Box */}
-          <div className="grid grid-cols-3 gap-1 p-2 rounded-[8px] bg-[#0c0d16] border border-border-subtle text-center text-[10px]">
+          <div className="grid grid-cols-3 gap-1 p-2 rounded-[8px] bg-[#0c0d16] border border-border-subtle text-center text-[11px]">
             <div className="flex flex-col">
-              <span className="text-text-quaternary font-bold">LOCKED</span>
-              <span className="text-text-secondary font-semibold mt-0.5" style={mono}>${roundStartPrice.toFixed(1)}</span>
+              <span className="text-text-quaternary font-bold text-[10px]">LOCKED</span>
+              <span className="text-text-secondary font-semibold text-[13px] mt-0.5" style={mono}>${roundStartPrice.toFixed(1)}</span>
             </div>
             <div className="flex flex-col border-x border-border-subtle/50">
-              <span className="text-text-quaternary font-bold">SPOT</span>
-              <span className="text-text-primary font-bold mt-0.5" style={mono}>${spot.toFixed(2)}</span>
+              <span className="text-text-quaternary font-bold text-[10px]">SPOT</span>
+              <span className="text-text-primary font-bold text-[13px] mt-0.5" style={mono}>${spot.toFixed(2)}</span>
             </div>
             <div className="flex flex-col">
-              <span className="text-text-quaternary font-bold">PAYOUT</span>
-              <span className={`font-extrabold mt-0.5 ${betSide === 'up' ? 'text-bullish-green' : 'text-bearish-red'}`} style={mono}>
+              <span className="text-text-quaternary font-bold text-[10px]">PAYOUT</span>
+              <span className={`font-extrabold text-[13px] mt-0.5 ${betSide === 'up' ? 'text-bullish-green' : 'text-bearish-red'}`} style={mono}>
                 {activeMultiplier.toFixed(2)}x
               </span>
             </div>
@@ -160,7 +160,7 @@ export default function PredictTrading({
 
           {/* Input details */}
           <div className="flex flex-col gap-1">
-            <div className="flex items-center justify-between text-text-tertiary text-[10px] px-0.5">
+            <div className="flex items-center justify-between text-text-tertiary text-[12px] px-0.5">
               <span>Enter Amount</span>
               <span className="text-text-quaternary" style={mono}>
                 Bal: ${balance.toFixed(2)}
@@ -169,16 +169,16 @@ export default function PredictTrading({
 
             {/* Input field */}
             <div className="flex items-center bg-[#0c0d16] rounded-[6px] px-2 py-1.5 border border-border-subtle gap-1.5 focus-within:border-brand-violet">
-              <span className="text-text-quaternary font-extrabold">$</span>
+              <span className="text-text-quaternary font-extrabold text-[15px]">$</span>
               <input
                 type="number"
                 value={amountRaw}
                 onChange={(e) => setAmountRaw(e.target.value)}
                 placeholder="0.00"
-                className="flex-1 bg-transparent text-[13px] text-text-primary outline-none font-bold placeholder:text-text-quaternary"
+                className="flex-1 bg-transparent text-[16px] text-text-primary outline-none font-bold placeholder:text-text-quaternary"
                 style={mono}
               />
-              <span className="text-[8px] px-1 py-0.5 rounded bg-surface-hover text-text-tertiary border border-border-subtle uppercase font-bold" style={mono}>
+              <span className="text-[10px] px-1 py-0.5 rounded bg-surface-hover text-text-tertiary border border-border-subtle uppercase font-bold" style={mono}>
                 USDT
               </span>
             </div>
@@ -189,14 +189,14 @@ export default function PredictTrading({
                 <button
                   key={pct}
                   onClick={() => selectPct(pct)}
-                  className="py-1 rounded bg-[#0c0d16] border border-border-subtle hover:bg-surface-hover text-[9px] text-text-tertiary hover:text-text-secondary cursor-pointer transition-colors"
+                  className="py-1 rounded bg-[#0c0d16] border border-border-subtle hover:bg-surface-hover text-[11px] text-text-tertiary hover:text-text-secondary cursor-pointer transition-colors"
                 >
                   {pct}%
                 </button>
               ))}
               <button
                 onClick={() => selectPct(100)}
-                className="py-1 rounded bg-[#0c0d16] border border-border-subtle hover:bg-surface-hover text-[9px] font-bold text-brand-violet cursor-pointer transition-colors"
+                className="py-1 rounded bg-[#0c0d16] border border-border-subtle hover:bg-surface-hover text-[11px] font-bold text-brand-violet cursor-pointer transition-colors"
               >
                 MAX
               </button>
@@ -206,47 +206,25 @@ export default function PredictTrading({
         </div>
 
         {/* Submit Block */}
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          {/* Buy UP Button */}
+        <div className="flex flex-col gap-1.5 mt-2">
+          {/* Submit Button */}
           <button
-            onClick={() => handleConfirm('up')}
+            onClick={() => handleConfirm(betSide)}
             disabled={!canSubmit}
-            className="w-full py-2.5 font-bold rounded-[8px] text-[10px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
+            className="w-full py-2.5 font-bold rounded-[8px] text-[13px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
             style={{
               backgroundColor: canSubmit
-                ? 'var(--color-bullish-green)'
+                ? (betSide === 'up' ? 'var(--color-bullish-green)' : 'var(--color-bearish-red)')
                 : 'var(--color-surface-hover)',
               color: canSubmit ? '#ffffff' : 'var(--color-text-quaternary)',
             }}
           >
             <span className="font-extrabold tracking-wide">
-              Buy UP · {upMultiplier.toFixed(2)}x
+              Buy {betSide === 'up' ? 'UP' : 'DOWN'} · {activeMultiplier.toFixed(2)}x
             </span>
             {amount > 0 && (
-              <span className="text-[8px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
-                Bet ${amount.toFixed(0)} to win ${(amount * upMultiplier).toFixed(2)}
-              </span>
-            )}
-          </button>
-
-          {/* Buy DOWN Button */}
-          <button
-            onClick={() => handleConfirm('down')}
-            disabled={!canSubmit}
-            className="w-full py-2.5 font-bold rounded-[8px] text-[10px] tracking-wide uppercase transition-all flex flex-col items-center justify-center cursor-pointer border border-transparent"
-            style={{
-              backgroundColor: canSubmit
-                ? 'var(--color-bearish-red)'
-                : 'var(--color-surface-hover)',
-              color: canSubmit ? '#ffffff' : 'var(--color-text-quaternary)',
-            }}
-          >
-            <span className="font-extrabold tracking-wide">
-              Buy DOWN · {downMultiplier.toFixed(2)}x
-            </span>
-            {amount > 0 && (
-              <span className="text-[8px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
-                Bet ${amount.toFixed(0)} to win ${(amount * downMultiplier).toFixed(2)}
+              <span className="text-[11px] font-medium opacity-85 mt-0.5 normal-case text-white/90" style={mono}>
+                Bet ${amount.toFixed(0)} to win ${(amount * activeMultiplier).toFixed(2)}
               </span>
             )}
           </button>
