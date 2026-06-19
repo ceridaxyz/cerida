@@ -15,8 +15,14 @@ version = "0.1.0"
 [workspace.dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+bcs = "0.1"
+bech32 = "0.9"
+blake2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 futures-util = "0.3"
+hex = "0.4"
 redis = { version = "0.32", features = ["aio", "tokio-comp"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }

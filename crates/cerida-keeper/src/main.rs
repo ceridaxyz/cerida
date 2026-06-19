@@ -2,15 +2,21 @@ use anyhow::Result;
 use cerida_core::config::Config;
 use cerida_core::db;
 use cerida_core::jobs::JobLane;
+use cerida_core::keeper_tx::{self, KeeperContext};
+use cerida_core::sui::SuiRpcClient;
 use redis::AsyncCommands;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tokio::time::{self, Duration};
 use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "cerida_keeper=info".into()))
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "cerida_keeper=info,cerida_core=info".into()),
+        )
         .init();
 
     let cfg = Config::from_env();
@@ -18,39 +24,36 @@ async fn main() -> Result<()> {
     db::migrate(&pool).await?;
     let redis = redis::Client::open(cfg.redis_url.clone())?;
 
-    info!(dry_run = cfg.keeper_dry_run, "keeper started");
+    let sui = SuiRpcClient::new(cfg.sui_rpc_url.clone());
+    let ctx = Arc::new(KeeperContext::new(sui, cfg.clone()));
+
+    info!(
+        dry_run = cfg.keeper_dry_run,
+        vault_id = ?cfg.vault_id,
+        "keeper started"
+    );
 
     tokio::try_join!(
-        run_lane(
-            pool.clone(),
-            redis.clone(),
-            cfg.clone(),
-            JobLane::IntentExecutor
-        ),
-        run_lane(
-            pool.clone(),
-            redis.clone(),
-            cfg.clone(),
-            JobLane::WindowLifecycle
-        ),
-        run_lane(
-            pool.clone(),
-            redis.clone(),
-            cfg.clone(),
-            JobLane::RiskExecutor
-        ),
+        run_lane(pool.clone(), redis.clone(), ctx.clone(), JobLane::IntentExecutor),
+        run_lane(pool.clone(), redis.clone(), ctx.clone(), JobLane::WindowLifecycle),
+        run_lane(pool.clone(), redis.clone(), ctx.clone(), JobLane::RiskExecutor),
     )?;
     Ok(())
 }
 
-async fn run_lane(pool: PgPool, redis: redis::Client, cfg: Config, lane: JobLane) -> Result<()> {
+async fn run_lane(
+    pool: PgPool,
+    redis: redis::Client,
+    ctx: Arc<KeeperContext>,
+    lane: JobLane,
+) -> Result<()> {
     let lane_name = lane.as_str();
     let mut ticker = time::interval(Duration::from_millis(750));
     loop {
         ticker.tick().await;
         match db::claim_job(&pool, lane_name).await {
             Ok(Some(job)) => {
-                let result = execute_job(&cfg, &job).await;
+                let result = keeper_tx::execute_job(&ctx, &job.job_type, &job.payload).await;
                 match result {
                     Ok(digest) => {
                         db::complete_job(&pool, job.id, digest.as_deref()).await?;
@@ -90,19 +93,6 @@ async fn run_lane(pool: PgPool, redis: redis::Client, cfg: Config, lane: JobLane
             Err(err) => warn!(lane = lane_name, ?err, "claim failed"),
         }
     }
-}
-
-async fn execute_job(cfg: &Config, job: &cerida_core::jobs::KeeperJob) -> Result<Option<String>> {
-    if cfg.keeper_dry_run {
-        info!(job_id = job.id, lane = %job.lane, job_type = %job.job_type, "dry-run keeper accepted job");
-        return Ok(Some(format!("dry-run:{}", job.id)));
-    }
-
-    anyhow::bail!(
-        "signed Sui execution is not enabled yet for lane={} job_type={}; set KEEPER_DRY_RUN=true for local indexing/API tests",
-        job.lane,
-        job.job_type
-    )
 }
 
 async fn publish(redis: &redis::Client, payload: serde_json::Value) -> Result<()> {
