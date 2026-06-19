@@ -48,9 +48,7 @@ const BottomTabs = lazy(() => import('../../components/market/bottom-tabs'));
 const TradingPanel = lazy(
   () => import('../../components/market/trading-panel'),
 );
-const ExecutionTicket = lazy(
-  () => import('../../components/market/execution-ticket'),
-);
+
 const RangeTrading = lazy(
   () => import('../../components/trading/range-trading'),
 );
@@ -105,7 +103,6 @@ type WidgetType =
   | 'flow'
   | 'iv'
   | 'trade'
-  | 'execution'
   | 'range'
   | 'positions'
   | 'panel';
@@ -178,18 +175,6 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <TradingPanel />
-      </Suspense>
-    ),
-  },
-  execution: {
-    label: 'Execution',
-    w: 5,
-    h: 8,
-    minW: 4,
-    minH: 5,
-    render: () => (
-      <Suspense fallback={<TradeSkeleton />}>
-        <ExecutionTicket />
       </Suspense>
     ),
   },
