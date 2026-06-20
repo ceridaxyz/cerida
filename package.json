@@ -1,11 +1,38 @@
 {
   "name": "cerida",
   "private": true,
-  "workspaces": ["app", "server", "workers"],
+  "workspaces": [
+    "app",
+    "server",
+    "workers",
+    "docker/scripts"
+  ],
   "scripts": {
     "dev": "bun run --filter '*' dev",
     "dev:app": "bun run --filter app dev",
     "build": "bun run --filter '*' build",
-    "test": "bun run --filter '*' test"
-  }
+    "test": "bun run --filter '*' test",
+    "local:deploy": "bun run --filter cerida-local deploy",
+    "local:setup": "bun run --filter cerida-local setup",
+    "local:flow": "bun run --filter cerida-local flow",
+    "local:all": "bun run --filter cerida-local all"
+  },
+  "version": "1.0.0",
+  "description": "- frontend (next and tailwind) - backend (typescript and rust) - move contracts",
+  "main": "index.js",
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ceridaxyz/cerida.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ceridaxyz/cerida/issues"
+  },
+  "homepage": "https://github.com/ceridaxyz/cerida#readme"
 }

@@ -90,6 +90,12 @@ export default function GridChart({ s }: { s: GridState }) {
   const [showIso, setShowIso] = useState(false);
   const isCandle = chartStyle === 'candles' || chartStyle === 'heikin';
 
+  // Zoom & Pan states
+  const [visBands, setVisBands] = useState<number>(14);
+  const [yOffset, setYOffset] = useState<number>(0);
+  const [winFuture, setWinFuture] = useState<number>(6 * EPOCH_MS);
+  const [xOffset, setXOffset] = useState<number>(0);
+
   // Drag-select state.
   const dragging = useRef(false);
   const dragMode = useRef<'add' | 'remove'>('add');
@@ -100,6 +106,98 @@ export default function GridChart({ s }: { s: GridState }) {
     return () => window.removeEventListener('pointerup', up);
   }, []);
 
+  const animatedCellsRef = useRef<Set<string>>(new Set());
+  const [animatingKeys, setAnimatingKeys] = useState<
+    Map<
+      string,
+      {
+        tone: 'settled' | 'win' | 'lose';
+        text?: string;
+        delay: number;
+      }
+    >
+  >(new Map());
+
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    const now = s.now;
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      // Mark all currently past cells as animated on mount
+      for (const epoch of s.epochs) {
+        if (epoch.end <= now) {
+          for (const band of s.bands) {
+            const key = `${epoch.id}:${band.idx}`;
+            animatedCellsRef.current.add(key);
+          }
+        }
+      }
+      return;
+    }
+
+    for (const epoch of s.epochs) {
+      const isPast = epoch.end <= now;
+      if (!isPast) continue;
+
+      for (const band of s.bands) {
+        const key = `${epoch.id}:${band.idx}`;
+        const leg = s.legs.get(key);
+        if (!leg) continue;
+
+        if (!animatedCellsRef.current.has(key)) {
+          animatedCellsRef.current.add(key);
+          const settle = s.settleOf(epoch);
+          const winner = settle !== null && settle >= band.lower && settle < band.upper;
+
+          setAnimatingKeys((prev) => {
+            const copy = new Map(prev);
+            copy.set(key, {
+              tone: winner ? 'win' : 'lose',
+              text: winner
+                ? `+$${(s.stake * (leg.multiplier - 1)).toFixed(0)}`
+                : `-$${s.stake.toFixed(0)}`,
+              delay: 0,
+            });
+            return copy;
+          });
+
+          setTimeout(() => {
+            setAnimatingKeys((prev) => {
+              const copy = new Map(prev);
+              copy.delete(key);
+              return copy;
+            });
+          }, 1050);
+        }
+      }
+    }
+  }, [s.now, s.epochs, s.bands, s.legs, s.stake]);
+
+  // Attach mouse wheel zoom listener to the container ref
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.shiftKey) {
+        // Zoom horizontal time scale
+        setWinFuture((prev) => {
+          const delta = e.deltaY > 0 ? 1 * EPOCH_MS : -1 * EPOCH_MS;
+          return Math.max(2 * EPOCH_MS, Math.min(15 * EPOCH_MS, prev + delta));
+        });
+      } else {
+        // Zoom vertical price bands
+        setVisBands((prev) => {
+          const delta = e.deltaY > 0 ? 1 : -1;
+          return Math.max(6, Math.min(22, prev + delta));
+        });
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [ref]);
+
   const plotW = Math.max(1, w - PAD_L - PAD_R);
   const plotH = Math.max(1, h - PAD_T - PAD_B);
 
@@ -107,7 +205,6 @@ export default function GridChart({ s }: { s: GridState }) {
   // height despite equal-probability (unequal-width) bands. The price axis labels
   // carry the non-uniform spacing instead. Price line stays pinned at centre.
   const strikeStep = (s.strikes[1] ?? 0) - (s.strikes[0] ?? 0) || 1; // edge-mode scale only
-  const VIS_BANDS = 14; // rows visible at once
   const lastStrike = s.strikes.length - 1;
   // Continuous band coordinate for any price (interpolates within its band).
   const bandCoordOf = (price: number): number => {
@@ -125,8 +222,8 @@ export default function GridChart({ s }: { s: GridState }) {
     return lastStrike;
   };
   const centerCoord = bandCoordOf(s.price);
-  const coordMin = centerCoord - VIS_BANDS / 2;
-  const coordMax = centerCoord + VIS_BANDS / 2;
+  const coordMin = centerCoord - visBands / 2 + yOffset;
+  const coordMax = centerCoord + visBands / 2 + yOffset;
   const coordSpan = coordMax - coordMin || 1;
   const yOf = (price: number) => PAD_T + ((coordMax - bandCoordOf(price)) / coordSpan) * plotH;
 
@@ -136,8 +233,8 @@ export default function GridChart({ s }: { s: GridState }) {
 
   // Sliding time window anchored on `now`: the "now" marker stays put at a fixed
   // screen x and the columns flow leftward through it as time advances.
-  const winStart = s.now - WIN_PAST;
-  const winEnd = s.now + WIN_FUTURE;
+  const winStart = s.now - WIN_PAST + xOffset;
+  const winEnd = s.now + winFuture + xOffset;
   const tSpan = winEnd - winStart; // constant
 
   // Only the columns inside (or straddling) the window are drawn.
@@ -153,26 +250,30 @@ export default function GridChart({ s }: { s: GridState }) {
   // Expected-move cone: ±1σ band fanning out from current price into the future.
   const coneUpper: string[] = [];
   const coneLower: string[] = [];
-  {
+  if (winEnd > s.now) {
     const steps = 16;
+    const startT = Math.max(s.now, winStart);
     for (let i = 0; i <= steps; i++) {
-      const t = s.now + ((winEnd - s.now) * i) / steps;
+      const t = startT + ((winEnd - startT) * i) / steps;
       const sig = s.sigmaAtTime(t);
       const x = xOf(t).toFixed(1);
       coneUpper.push(`${x},${yOf(s.price + sig).toFixed(1)}`);
       coneLower.push(`${x},${yOf(s.price - sig).toFixed(1)}`);
     }
   }
-  const conePath = `M${coneUpper.join(' L')} L${[...coneLower].reverse().join(' L')} Z`;
+  const conePath = coneUpper.length > 0 ? `M${coneUpper.join(' L')} L${[...coneLower].reverse().join(' L')} Z` : '';
 
   // Probability isolines: equal-probability contours = price ± k·σ(t) across the
   // future window. Together they form the expected-range corridor.
   const isoSteps = 20;
   const isoline = (k: number, side: 1 | -1) => {
     const pts: string[] = [];
-    for (let i = 0; i <= isoSteps; i++) {
-      const t = s.now + ((winEnd - s.now) * i) / isoSteps;
-      pts.push(`${xOf(t).toFixed(1)},${yOf(s.price + side * k * s.sigmaAtTime(t)).toFixed(1)}`);
+    if (winEnd > s.now) {
+      const startT = Math.max(s.now, winStart);
+      for (let i = 0; i <= isoSteps; i++) {
+        const t = startT + ((winEnd - startT) * i) / isoSteps;
+        pts.push(`${xOf(t).toFixed(1)},${yOf(s.price + side * k * s.sigmaAtTime(t)).toFixed(1)}`);
+      }
     }
     return pts.join(' ');
   };
@@ -240,12 +341,51 @@ export default function GridChart({ s }: { s: GridState }) {
   const onCellEnter = (epoch: Epoch, band: Band) => {
     if (!dragging.current) return;
     const key = `${epoch.id}:${band.idx}`;
-    if (dragMode.current === 'add' && !s.hasLeg(key)) s.addLeg(epoch, band);
-    if (dragMode.current === 'remove' && s.hasLeg(key)) s.removeLeg(key);
+    if (dragMode.current === 'add' && !s.hasLeg(key)) {
+      s.addLeg(epoch, band);
+    }
+    if (dragMode.current === 'remove' && s.hasLeg(key)) {
+      s.removeLeg(key);
+    }
   };
 
   return (
     <div className="flex flex-col h-full w-full">
+      <style>{`
+        @keyframes gridFallOut {
+          0% {
+            transform: translate3d(0,0,0) rotate(0deg) scale(1);
+            opacity: 1;
+            filter: blur(0px);
+          }
+          18% {
+            transform: translate3d(0,-7px,0) rotate(-1.5deg) scale(1.025);
+            opacity: 1;
+          }
+          100% {
+            transform: translate3d(0,150px,0) rotate(12deg) scale(0.72);
+            opacity: 0;
+            filter: blur(1px);
+          }
+        }
+        @keyframes gridSettleShadow {
+          0% {
+            box-shadow: 0 0 0 rgba(0,0,0,0);
+          }
+          35% {
+            box-shadow: 0 10px 22px rgba(0,0,0,0.35);
+          }
+          100% {
+            box-shadow: 0 16px 28px rgba(0,0,0,0);
+          }
+        }
+        .animate-fall-out {
+          animation:
+            gridFallOut 0.95s cubic-bezier(0.22, 0.72, 0.16, 1) forwards,
+            gridSettleShadow 0.95s ease-out forwards;
+          transform-origin: 50% 50%;
+        }
+      `}</style>
       {/* Toolbar — all overlays/toggles live here, off the grid */}
       <div className="flex items-center gap-1.5 px-2 h-8 shrink-0 border-b border-border-subtle overflow-x-auto">
         <span
@@ -307,6 +447,70 @@ export default function GridChart({ s }: { s: GridState }) {
         >
           Corridor
         </button>
+
+        {/* Zoom & Pan Controls */}
+        <div className="flex items-center gap-1 border-l border-border-subtle pl-2 shrink-0">
+          <span className="text-[8px] text-text-quaternary uppercase tracking-wider select-none font-bold">Zoom</span>
+          <button
+            onClick={() => setVisBands((b) => Math.max(6, b - 1))}
+            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[10px] font-bold"
+            title="Zoom In (Price)"
+          >
+            +
+          </button>
+          <button
+            onClick={() => setVisBands((b) => Math.min(22, b + 1))}
+            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[10px] font-bold"
+            title="Zoom Out (Price)"
+          >
+            -
+          </button>
+
+          <span className="text-[8px] text-text-quaternary uppercase tracking-wider select-none font-bold ml-1">Pan</span>
+          <button
+            onClick={() => setYOffset((y) => y + 1)}
+            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
+            title="Pan Up"
+          >
+            ▲
+          </button>
+          <button
+            onClick={() => setYOffset((y) => y - 1)}
+            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
+            title="Pan Down"
+          >
+            ▼
+          </button>
+          <button
+            onClick={() => setXOffset((x) => x - 15 * 1000)}
+            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
+            title="Pan Left"
+          >
+            ◀
+          </button>
+          <button
+            onClick={() => setXOffset((x) => x + 15 * 1000)}
+            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
+            title="Pan Right"
+          >
+            ▶
+          </button>
+
+          {(yOffset !== 0 || xOffset !== 0 || visBands !== 14 || winFuture !== 6 * EPOCH_MS) && (
+            <button
+              onClick={() => {
+                setYOffset(0);
+                setXOffset(0);
+                setVisBands(14);
+                setWinFuture(6 * EPOCH_MS);
+              }}
+              className="px-1 py-0.5 rounded-[4px] bg-bearish-red/10 border border-bearish-red/20 text-bearish-red text-[8px] font-bold uppercase tracking-wider hover:bg-bearish-red/20 transition-colors"
+              title="Reset Zoom & Pan"
+            >
+              Reset
+            </button>
+          )}
+        </div>
 
         {/* chart style — pushed to the right */}
         <div className="flex items-center gap-0.5 rounded-[5px] p-0.5 ml-auto shrink-0" style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -417,9 +621,28 @@ export default function GridChart({ s }: { s: GridState }) {
           const fs = Math.max(8, Math.min(13, Math.min(cw * 0.125, ch * 0.55)));
           const fsSub = Math.max(7, fs * 0.82);
           const isFocused = epoch.id === s.focusedEpoch;
+          const key = `${epoch.id}:${band.idx}`;
+          const animInfo = animatingKeys.get(key);
+          const isAnimating = Boolean(animInfo);
+          const isPastChosen = isPast && s.legs.has(key) && animatedCellsRef.current.has(key);
+          const animTone =
+            animInfo?.tone === 'win'
+              ? {
+                  bg: 'rgba(245,193,66,0.34)',
+                  border: '#f5c142',
+                  color: '#f5c142',
+                }
+              : animInfo?.tone === 'lose'
+                ? {
+                    bg: 'rgba(242,53,70,0.2)',
+                    border: '#f23546',
+                    color: '#f23546',
+                  }
+                : null;
           return (
             <div
-              key={`${epoch.id}:${band.idx}`}
+              key={key}
+              id={`cell-${epoch.id}-${band.idx}`}
               onPointerDown={isPast ? undefined : () => onCellDown(epoch, band)}
               onPointerEnter={(e) => {
                 if (!isPast) onCellEnter(epoch, band);
@@ -448,22 +671,39 @@ export default function GridChart({ s }: { s: GridState }) {
               }}
               onPointerLeave={() => setHover(null)}
               onClick={isPast ? undefined : () => s.setFocusedEpoch(epoch.id)}
-              className="absolute flex flex-col items-center justify-center transition-colors"
+              className={`absolute flex flex-col items-center justify-center transition-colors ${
+                isAnimating ? 'animate-fall-out' : ''
+              }`}
               style={{
                 left: left + 1,
                 top: top + 1,
                 width: Math.max(0, cw - 2),
                 height: Math.max(0, ch - 2),
-                background: c.bg,
-                border: `1px solid ${c.border}`,
+                background: animTone?.bg ?? c.bg,
+                border: `1px solid ${animTone?.border ?? c.border}`,
                 borderRadius: 4,
-                opacity: c.opacity,
+                opacity: isPastChosen && !isAnimating ? 0 : c.opacity,
                 cursor: isPast ? 'default' : 'pointer',
                 outline: isFocused && !isPast ? '1px solid rgba(128,125,254,0.35)' : 'none',
                 outlineOffset: -1,
+                color: animTone?.color,
+                textShadow: animInfo ? '0 0 8px currentColor' : undefined,
+                zIndex: isAnimating ? 50 : undefined,
               }}
             >
-              {big && cell.state === 'available' && (
+              {isAnimating && animInfo?.text && (
+                <span
+                  className="font-bold whitespace-nowrap"
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: fs,
+                    lineHeight: 1.1,
+                  }}
+                >
+                  {animInfo.text}
+                </span>
+              )}
+              {!isAnimating && big && cell.state === 'available' && (
                 <span
                   className="font-semibold whitespace-nowrap"
                   style={{
@@ -481,7 +721,7 @@ export default function GridChart({ s }: { s: GridState }) {
                     : `${cell.multiplier.toFixed(2)}x`}
                 </span>
               )}
-              {big && cell.state === 'selected' && (
+              {!isAnimating && big && cell.state === 'selected' && (
                 <>
                   <span className="font-bold text-text-primary whitespace-nowrap" style={{ fontSize: fs, lineHeight: 1.1 }}>{cell.multiplier.toFixed(2)}x</span>
                   <span className="text-accent-light whitespace-nowrap" style={{ fontFamily: 'var(--font-mono)', fontSize: fsSub, lineHeight: 1.1 }}>
@@ -489,7 +729,7 @@ export default function GridChart({ s }: { s: GridState }) {
                   </span>
                 </>
               )}
-              {big && cell.state === 'active' && (
+              {!isAnimating && big && cell.state === 'active' && (
                 <span
                   className="font-bold whitespace-nowrap"
                   style={{
@@ -503,7 +743,7 @@ export default function GridChart({ s }: { s: GridState }) {
                   {Math.abs(cell.uPnl ?? 0).toFixed(2)}
                 </span>
               )}
-              {big && cell.state === 'claimable' && (
+              {!isAnimating && big && cell.state === 'claimable' && (
                 <>
                   <span className="font-bold uppercase tracking-wider animate-pulse whitespace-nowrap" style={{ color: '#f5c142', fontSize: fsSub, lineHeight: 1.1 }}>
                     Claim
@@ -696,7 +936,7 @@ export default function GridChart({ s }: { s: GridState }) {
                   color: '#a6a3ff',
                 }}
               >
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-bullish-green animate-pulse" />
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-bullish-green animate-pulse" style={{ boxShadow: '0 0 8px #0b9981' }} />
                 LIVE
               </span>
               {/* progress bar at the bottom of the column */}
@@ -712,22 +952,25 @@ export default function GridChart({ s }: { s: GridState }) {
             </div>
           );
         })}
-
+ 
       {/* hover tooltip */}
       {hover && (
         <div
-          className="absolute z-20 pointer-events-none rounded-[6px] border border-border-default bg-surface-card px-2.5 py-1.5 shadow-xl"
+          className="absolute z-20 pointer-events-none rounded-xl border border-white/10 bg-[#0a0c16]/85 backdrop-blur-md px-3.5 py-2 shadow-2xl transition-all duration-150"
           style={{
-            left: Math.min(hover.mx + 14, w - 150),
-            top: Math.min(hover.my + 14, h - 70),
+            left: Math.min(hover.mx + 14, w - 165),
+            top: Math.min(hover.my + 14, h - 80),
           }}
         >
-          <div className="text-[11px] font-semibold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-            ${hover.lower}–{hover.upper}
+          <div className="text-[11px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
+            ${hover.lower.toLocaleString()} – ${hover.upper.toLocaleString()}
           </div>
-          <div className="flex gap-3 mt-1 text-[10px]" style={{ fontFamily: 'var(--font-mono)' }}>
-            <span className="text-text-tertiary">{(hover.prob * 100).toFixed(0)}%</span>
-            <span className="text-bullish-green">{hover.mult.toFixed(2)}x</span>
+          <div className="flex items-center gap-3 mt-1.5 text-[10px]" style={{ fontFamily: 'var(--font-mono)' }}>
+            <span className="text-text-tertiary flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand-violet" />
+              {(hover.prob * 100).toFixed(0)}%
+            </span>
+            <span className="text-bullish-green font-bold">{hover.mult.toFixed(2)}x</span>
             <span className="text-text-secondary">${hover.cost.toFixed(2)}</span>
           </div>
         </div>

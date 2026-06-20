@@ -10,25 +10,39 @@ import {
   type IPriceLine,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { getChartOracle, getPriceHistory, type PricePoint } from '../../lib/predict-api';
+import { getActiveLadder, getHistory, type HistPoint } from '../../lib/cerida-api';
 
 const POLL_MS = 4000;
 const UP = '#19e6bd';
 const DOWN = '#f23546';
 
-// Underlying BTC spot as an area chart with the binary strike drawn as a target
+function formatMins(m: number) {
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    const remaining = m % 60;
+    return remaining > 0 ? `${h}h ${remaining}m` : `${h}h`;
+  }
+  return `${m}m`;
+}
+
+// Underlying spot as an area chart with the baseline strike drawn as a target
 // line — "does spot reach the target by expiry?".
 export default function CryptoPrice() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Area'> | null>(null);
   const targetLineRef = useRef<IPriceLine | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
   const [oid, setOid] = useState<string | null>(null);
   const [expiry, setExpiry] = useState<number>(0);
-  const [target, setTarget] = useState<number>(0);
-  const [hdr, setHdr] = useState<{ spot: number; chg: number } | null>(null);
+  const [hdr, setHdr] = useState<{ spot: number; target: number; chg: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [err, setErr] = useState<string | null>(null);
+  
+  const [priceScaleWidth, setPriceScaleWidth] = useState<number>(60);
+  const [pillY, setPillY] = useState<number | null>(null);
+  const [asset, setAsset] = useState<string>('BTC');
 
   useEffect(() => {
     if (!wrapRef.current) return;
@@ -42,13 +56,13 @@ export default function CryptoPrice() {
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: 'rgba(255,255,255,0.035)' },
-        horzLines: { color: 'rgba(255,255,255,0.05)' },
+        vertLines: { color: 'rgba(255,255,255,0.035)', style: LineStyle.Dashed },
+        horzLines: { color: 'rgba(255,255,255,0.05)', style: LineStyle.Dashed },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: 'rgba(128,125,254,0.5)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#807dfe' },
-        horzLine: { color: 'rgba(128,125,254,0.5)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#807dfe' },
+        vertLine: { color: 'rgba(255,255,255,0.15)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1a1b2e' },
+        horzLine: { color: 'rgba(255,255,255,0.15)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1a1b2e' },
       },
       rightPriceScale: { borderColor: 'rgba(255,255,255,0.06)' },
       timeScale: { borderColor: 'rgba(255,255,255,0.06)', timeVisible: true, secondsVisible: true },
@@ -59,7 +73,38 @@ export default function CryptoPrice() {
       bottomColor: 'rgba(242,53,70,0)',
       lineWidth: 2,
       priceFormat: { type: 'price', precision: 0, minMove: 1 },
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
+
+    chart.subscribeCrosshairMove((param) => {
+      const tooltip = tooltipRef.current;
+      if (!tooltip) return;
+
+      if (
+        !param.point ||
+        !param.time ||
+        param.point.x < 0 ||
+        param.point.x > wrapRef.current!.clientWidth ||
+        param.point.y < 0 ||
+        param.point.y > wrapRef.current!.clientHeight
+      ) {
+        tooltip.style.display = 'none';
+      } else {
+        const data = param.seriesData.get(series);
+        if (data) {
+          tooltip.style.display = 'block';
+          tooltip.style.left = `${param.point.x + 12}px`;
+          tooltip.style.top = `${param.point.y}px`;
+          
+          const val = (data as { value?: number; close?: number }).value ?? (data as { value?: number; close?: number }).close ?? 0;
+          tooltip.innerHTML = `<span style="color: #ff9800; margin-right: 4px;">•</span><span style="color: #9ca3af;">${asset}</span> <span style="font-weight: bold; color: #ffffff;">$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
+        } else {
+          tooltip.style.display = 'none';
+        }
+      }
+    });
+
     chartRef.current = chart;
     seriesRef.current = series;
     return () => {
@@ -68,15 +113,17 @@ export default function CryptoPrice() {
       seriesRef.current = null;
       targetLineRef.current = null;
     };
-  }, []);
+  }, [asset]);
 
   useEffect(() => {
     let alive = true;
-    getChartOracle()
-      .then((o) => {
-        if (!alive || !o) return;
-        setOid(o.oracle_id);
-        setExpiry(o.expiry);
+    getActiveLadder()
+      .then((l) => {
+        const m = l[0];
+        if (!alive || !m) return;
+        setOid(m.oracleId);
+        setExpiry(m.expiry);
+        setAsset(m.asset.split('-')[0] || 'BTC');
       })
       .catch((e) => alive && setErr(String(e)));
     return () => {
@@ -88,8 +135,8 @@ export default function CryptoPrice() {
     if (!oid) return;
     let alive = true;
     const tick = () =>
-      getPriceHistory(oid)
-        .then((pts: PricePoint[]) => {
+      getHistory(oid)
+        .then((pts: HistPoint[]) => {
           if (!alive || pts.length < 2 || !seriesRef.current) return;
           // unique ascending times (1s resolution)
           const byT = new Map<number, number>();
@@ -99,8 +146,7 @@ export default function CryptoPrice() {
 
           const last = data[data.length - 1]!.value;
           const first = data[0]!.value;
-          const tgt = target || Math.round(last / 25) * 25 + 25; // strike just above spot
-          if (!target) setTarget(tgt);
+          const tgt = first; // target is always the baseline starting spot
 
           // colour the area by whether spot is above/below the target
           const above = last >= tgt;
@@ -112,17 +158,17 @@ export default function CryptoPrice() {
 
           // (re)draw the target line
           if (targetLineRef.current) seriesRef.current.removePriceLine(targetLineRef.current);
-          const mins = Math.max(0, Math.round((expiry - Date.now()) / 60000));
+          const minsVal = Math.max(0, Math.round((expiry - Date.now()) / 60000));
           targetLineRef.current = seriesRef.current.createPriceLine({
             price: tgt,
-            color: '#f0a020',
+            color: '#f0a020', // original color
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
             axisLabelVisible: true,
-            title: `${mins}m`,
+            title: formatMins(minsVal),
           });
 
-          setHdr({ spot: last, chg: ((last - first) / first) * 100 });
+          setHdr({ spot: last, target: tgt, chg: ((last - tgt) / tgt) * 100 });
           setNow(Date.now());
         })
         .catch((e) => alive && setErr(String(e)));
@@ -132,20 +178,32 @@ export default function CryptoPrice() {
       alive = false;
       clearInterval(id);
     };
-  }, [oid, target, expiry]);
+  }, [oid, expiry]);
+
+  // Coordinate tracking for custom Y-axis pill
+  useEffect(() => {
+    if (!chartRef.current || !seriesRef.current || !hdr) return;
+    const handle = requestAnimationFrame(() => {
+      if (!seriesRef.current) return;
+      const y = seriesRef.current.priceToCoordinate(hdr.spot);
+      setPillY(y);
+      setPriceScaleWidth(seriesRef.current.priceScale().width());
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [hdr, now]);
 
   const mono = { fontFamily: 'var(--font-mono)' } as const;
   const mins = expiry ? Math.max(0, Math.round((expiry - now) / 60000)) : 0;
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle shrink-0 text-[11px]">
-        <span className="text-[15px] font-bold text-text-primary" style={mono}>
-          {hdr ? `$${hdr.spot.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : err ? 'error' : '—'}
+    <div className="flex flex-col h-full relative">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle shrink-0">
+        <span className="text-[20px] font-bold text-text-primary tracking-tight" style={mono}>
+          {hdr ? `$${hdr.spot.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : err ? 'error' : '—'}
         </span>
-        {target > 0 && (
-          <span className="text-text-quaternary">
-            Target <span className="text-text-secondary" style={mono}>${target.toLocaleString('en-US')}</span>
+        {hdr && hdr.target > 0 && (
+          <span className="text-text-quaternary text-[11px] font-medium">
+            Target <span className="text-text-secondary font-bold" style={mono}>${hdr.target.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </span>
         )}
         {hdr && (
@@ -155,7 +213,53 @@ export default function CryptoPrice() {
         )}
         <span className="ml-auto text-text-quaternary text-[10px]" style={mono}>{mins}m · live</span>
       </div>
-      <div ref={wrapRef} className="flex-1 min-h-0" />
+      
+      <div className="flex-1 min-h-0 relative">
+        <div ref={wrapRef} className="w-full h-full" />
+        
+        {/* Custom Price Pill on the Right Price Scale */}
+        <div
+          className="absolute pointer-events-none select-none z-20 flex flex-col items-center"
+          style={{
+            top: pillY !== null ? `${pillY}px` : '0px',
+            right: 0,
+            width: `${priceScaleWidth}px`,
+            transform: 'translateY(-50%)',
+            display: pillY !== null ? 'flex' : 'none',
+          }}
+        >
+          <div className="bg-[#ff9800] text-white text-[10px] px-1 py-0.5 rounded-[4px] font-bold" style={mono}>
+            ${hdr ? hdr.spot.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : ''}
+          </div>
+          <div className="flex flex-col items-center -mt-0.5 gap-0.5">
+            {hdr && hdr.target > 0 && (
+              hdr.spot >= hdr.target ? (
+                <>
+                  <span className="text-[#f23546] text-[8px] leading-[4px] font-bold">▼</span>
+                  <span className="text-[#f23546]/80 text-[8px] leading-[4px] font-bold">▼</span>
+                  <span className="text-[#f23546]/50 text-[8px] leading-[4px] font-bold">▼</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-[#19e6bd]/50 text-[8px] leading-[4px] font-bold">▲</span>
+                  <span className="text-[#19e6bd]/80 text-[8px] leading-[4px] font-bold">▲</span>
+                  <span className="text-[#19e6bd] text-[8px] leading-[4px] font-bold">▲</span>
+                </>
+              )
+            )}
+          </div>
+        </div>
+
+        {/* Custom Hover Tooltip */}
+        <div
+          ref={tooltipRef}
+          className="absolute hidden pointer-events-none select-none z-30 bg-[#0d0f1a]/95 border border-border-subtle rounded-[6px] px-2 py-1 text-[11px] text-text-primary whitespace-nowrap shadow-lg"
+          style={{
+            transform: 'translateY(-50%)',
+            fontFamily: 'var(--font-mono)',
+          }}
+        />
+      </div>
     </div>
   );
 }

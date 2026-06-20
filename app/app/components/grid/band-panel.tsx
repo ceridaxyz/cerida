@@ -64,7 +64,7 @@ export default function BandPanel({ s }: { s: GridState }) {
         <span className="w-5" />
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto no-scrollbar">
         {rows.map((band) => {
           const cell = s.cellFor(epoch, band);
           const key = `${epoch.id}:${band.idx}`;

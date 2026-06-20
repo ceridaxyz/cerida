@@ -1,0 +1,17 @@
+{
+  "name": "@cerida/price-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Indexes BTC spot (and forward) from the Predict feed into TimescaleDB; serves latest + history.",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
+  }
+}

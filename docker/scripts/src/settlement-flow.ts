@@ -321,6 +321,7 @@ async function main() {
         tx.pure.u64(strike),
         tx.pure.bool(true),
         tx.pure.u64(qty),
+        tx.pure.u64(0n), // max_cost=0 → market order
         pay,
       ],
     });

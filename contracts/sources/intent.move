@@ -23,6 +23,9 @@ public struct Intent has store {
     higher: u64,
     qty: u64,
     escrowed: u64,
+    /// Maximum cost the user will accept per execution. 0 = market order (no limit).
+    /// Only meaningful for KIND_PREDICT_BINARY and KIND_PREDICT_RANGE.
+    max_cost: u64,
     maint_bps: u64,
     tp_value: u64,
     sl_value: u64,
@@ -80,6 +83,12 @@ public fun higher(intent: &Intent): u64 {
     intent.higher
 }
 
+/// Maximum cost limit for predict intents. 0 = no limit (market order).
+public fun max_cost(intent: &Intent): u64 {
+    assert!(intent.kind == KIND_PREDICT_BINARY || intent.kind == KIND_PREDICT_RANGE, 0);
+    intent.max_cost
+}
+
 // === Leverage-only getters ===
 
 public fun maint_bps(intent: &Intent): u64 {
@@ -113,16 +122,16 @@ public fun band_idx(intent: &Intent): u64 {
 
 public(package) fun new_predict_binary(
     user: address, oracle_id: ID, expiry: u64,
-    strike: u64, is_up: bool, qty: u64, escrowed: u64,
+    strike: u64, is_up: bool, qty: u64, escrowed: u64, max_cost: u64,
 ): Intent {
-    new_intent(KIND_PREDICT_BINARY, user, oracle_id, expiry, strike, is_up, 0, 0, qty, escrowed, 0, 0, 0, 0, 0)
+    new_intent(KIND_PREDICT_BINARY, user, oracle_id, expiry, strike, is_up, 0, 0, qty, escrowed, max_cost, 0, 0, 0, 0, 0)
 }
 
 public(package) fun new_predict_range(
     user: address, oracle_id: ID, expiry: u64,
-    lower: u64, higher: u64, qty: u64, escrowed: u64,
+    lower: u64, higher: u64, qty: u64, escrowed: u64, max_cost: u64,
 ): Intent {
-    new_intent(KIND_PREDICT_RANGE, user, oracle_id, expiry, 0, false, lower, higher, qty, escrowed, 0, 0, 0, 0, 0)
+    new_intent(KIND_PREDICT_RANGE, user, oracle_id, expiry, 0, false, lower, higher, qty, escrowed, max_cost, 0, 0, 0, 0, 0)
 }
 
 public(package) fun new_leverage_binary(
@@ -130,7 +139,7 @@ public(package) fun new_leverage_binary(
     strike: u64, is_up: bool, qty: u64, escrowed: u64,
     maint_bps: u64, tp_value: u64, sl_value: u64,
 ): Intent {
-    new_intent(KIND_LEVERAGE_BINARY, user, oracle_id, expiry, strike, is_up, 0, 0, qty, escrowed, maint_bps, tp_value, sl_value, 0, 0)
+    new_intent(KIND_LEVERAGE_BINARY, user, oracle_id, expiry, strike, is_up, 0, 0, qty, escrowed, 0, maint_bps, tp_value, sl_value, 0, 0)
 }
 
 public(package) fun new_leverage_range(
@@ -138,13 +147,13 @@ public(package) fun new_leverage_range(
     lower: u64, higher: u64, qty: u64, escrowed: u64,
     maint_bps: u64, tp_value: u64, sl_value: u64,
 ): Intent {
-    new_intent(KIND_LEVERAGE_RANGE, user, oracle_id, expiry, 0, false, lower, higher, qty, escrowed, maint_bps, tp_value, sl_value, 0, 0)
+    new_intent(KIND_LEVERAGE_RANGE, user, oracle_id, expiry, 0, false, lower, higher, qty, escrowed, 0, maint_bps, tp_value, sl_value, 0, 0)
 }
 
 public(package) fun new_window_bet(
     user: address, epoch_id: u64, band_idx: u64, qty: u64, escrowed: u64,
 ): Intent {
-    new_intent(KIND_WINDOW_BET, user, @0x0.to_id(), 0, 0, false, 0, 0, qty, escrowed, 0, 0, 0, epoch_id, band_idx)
+    new_intent(KIND_WINDOW_BET, user, @0x0.to_id(), 0, 0, false, 0, 0, qty, escrowed, 0, 0, 0, 0, epoch_id, band_idx)
 }
 
 public(package) fun destroy(intent: Intent): (address, u64) {
@@ -159,6 +168,7 @@ public(package) fun destroy(intent: Intent): (address, u64) {
         higher: _,
         qty: _,
         escrowed,
+        max_cost: _,
         maint_bps: _,
         tp_value: _,
         sl_value: _,
@@ -179,6 +189,7 @@ fun new_intent(
     higher: u64,
     qty: u64,
     escrowed: u64,
+    max_cost: u64,
     maint_bps: u64,
     tp_value: u64,
     sl_value: u64,
@@ -196,6 +207,7 @@ fun new_intent(
         higher,
         qty,
         escrowed,
+        max_cost,
         maint_bps,
         tp_value,
         sl_value,

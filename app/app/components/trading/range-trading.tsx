@@ -234,7 +234,7 @@ export default function RangeTrading({
 
   return (
     <div className="flex flex-col h-full bg-surface-primary text-[12px]">
-      <div className="flex flex-col gap-3 px-3 py-3 flex-1 overflow-y-auto overflow-x-hidden">
+      <div className="flex flex-col gap-3 px-3 py-3 flex-1 overflow-y-auto overflow-x-hidden no-scrollbar">
 
         {/* Lands-in header */}
         <div className="flex items-center justify-between">

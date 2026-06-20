@@ -314,7 +314,7 @@ async function main() {
   const qty = 100n * DUSDC_SCALE; // 100 contracts
   const escrow = 200n * DUSDC_SCALE; // slippage cap ($200; cost should be well under)
 
-  // 2. request_mint_binary (continuous strike, UP).
+  // 2. request_mint_binary (continuous strike, UP). max_cost=0 = market order.
   {
     const tx = new Transaction();
     const [pay] = tx.splitCoins(
@@ -331,6 +331,7 @@ async function main() {
         tx.pure.u64(strike),
         tx.pure.bool(true),
         tx.pure.u64(qty),
+        tx.pure.u64(0n), // max_cost=0 → market order
         pay,
       ],
     });
@@ -339,11 +340,9 @@ async function main() {
     assert(fieldBigInt(ev, 'intent_id') === 0n, 'binary mint intent id is 0');
     assert(fieldBool(ev, 'is_range') === false, 'binary mint event is not range');
     assert(fieldBigInt(ev, 'qty') === qty, 'binary mint requested qty matches');
-    assert(
-      fieldBigInt(ev, 'escrowed') === escrow,
-      'binary mint escrow matches',
-    );
-    console.log('escrowed mint intent #0 (UP $63,000)');
+    assert(fieldBigInt(ev, 'escrowed') === escrow, 'binary mint escrow matches');
+    assert(fieldBigInt(ev, 'max_cost') === 0n, 'binary mint max_cost is 0 (market)');
+    console.log('escrowed mint intent #0 (UP $63,000, market order)');
   }
 
   // 3. execute_mint (keeper). Re-feed the oracle first so it passes the 30s
@@ -445,6 +444,7 @@ async function main() {
         tx.pure.u64(lower),
         tx.pure.u64(higher),
         tx.pure.u64(qty),
+        tx.pure.u64(0n), // max_cost=0 → market order
         pay,
       ],
     });

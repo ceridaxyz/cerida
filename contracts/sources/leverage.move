@@ -1,107 +1,178 @@
 // Copyright (c) Cerida
 // SPDX-License-Identifier: Apache-2.0
 
-/// Leverage over Cerida positions — a margined CDP on YES/NO (and range) shares.
+/// Turbo Tickets + limit orders — fully-reserved knockout leverage on Predict's mark.
+/// Model: paper/leverage-model.md · validation: simulations/leverage_mc.ts.
 ///
-/// A trader posts margin; the `MarginPool` lends the rest; the combined funds
-/// mint MORE Predict shares than the margin alone could buy. The shares (a
-/// custodied `PositionToken`) are the collateral, and the position is liquidated
-/// when its live mark falls toward the debt. Because Predict is a vault/AMM (PLP
-/// is the counterparty, price is deterministic), liquidation has no depth or
-/// slippage risk — the redeem value comes straight from `predict::get_trade_amounts`
-/// — so we can run more leverage than a CLOB-based product, throttled by the
-/// keeper's risk engine. Shares gap to $1/$0 at resolution, so leverage is meant
-/// to be force-closed before settlement (`force_close`); the keeper enforces that.
+/// The pool is the COUNTERPARTY, not a lender. A trader posts margin `m`; the
+/// pool locks the ticket's maximum payout (`reserved = qty − basis`) at open;
+/// both sides are sealed inside the position from the first second. Equity
+/// tracks Predict's live bid and is clamped to [0, m + reserved]:
 ///
-/// Custody mirrors `cerida::vault`: every manager op in `predict-testnet-4-16` is
-/// owner-gated, so the keeper (manager owner) runs the mint/redeem. Positions live
-/// in a shared `LeverageBook` table so the keeper can reach them by id.
+///   X = clip( m + bid·qty − basis , 0 , m + reserved )
 ///
-/// Math (prices/marks scaled 1e9, amounts raw 1e6):
-///   Health       = (value − debt) / init_margin       value = bid·qty (raw units)
-///   liquidatable ⇔ value ≤ debt + maint_bps·init_margin/1e4
+/// Because prediction shares are bounded at $1, the worst case is finite and
+/// pre-funded — bad debt is impossible by construction (no debt object exists;
+/// Prop. 2 of the model). Knockout fires when X ≤ maint_bps·m/1e4; the trader
+/// keeps the residual minus a penalty (Prop. 3 keeps the expected cost exact).
+///
+/// TP/SL: the owner pre-authorises conditional exits by setting tp_value /
+/// sl_value on the ticket. Anyone may then call execute_tp / execute_sl once the
+/// live bid·qty crosses the level — same close semantics (perf fee, no penalty).
+///
+/// Limit orders: sealed escrow in a separate LimitBook. The owner commits margin
+/// at placement; anyone calls execute_limit once the ask crosses limit_basis.
+/// The opened ticket is assigned to the original owner regardless of who executes.
+///
+/// Trust model: nothing here needs Predict's owner-gated manager — the mark
+/// comes from the immutable `get_trade_amounts` — so the whole lifecycle is
+/// permissionless: `open`/`close` are trader-signed, `liquidate`/`force_close`/
+/// `execute_tp`/`execute_sl`/`execute_limit` are open to anyone with on-chain
+/// verification, and `cancel_limit`/`expire_limit` return the escrow safely.
 module cerida::leverage;
 
-use cerida::position_token::{Self, PositionToken};
-use cerida::vault::CeridaVault;
 use deepbook_predict::{
     market_key,
     oracle::OracleSVI,
+    plp::PLP,
     predict::{Self, Predict},
-    predict_manager::PredictManager,
     range_key
 };
-use sui::{balance::{Self, Balance}, clock::Clock, coin::Coin, event, table::{Self, Table}};
+use sui::{balance::{Self, Balance}, clock::Clock, coin::{Self, Coin}, event, table::{Self, Table}};
 
 // === Constants ===
-/// Price scale: a mark in [0, FLOAT] represents $0–$1.
-const FLOAT: u128 = 1_000_000_000;
-/// Basis-point denominator.
-const BPS: u128 = 10_000;
-/// Hard backstop on leverage (50× = 500_000 bps); the keeper enforces the
-/// dynamic, lower cap per position.
+/// Hard on-chain leverage backstop: basis ≤ 50× margin. The dynamic, lower
+/// usable-leverage cap (model §6.1) is policy enforced off-chain — it protects
+/// the trader from near-certain knockout, never the pool's solvency.
 const MAX_LEVERAGE_BPS: u64 = 500_000;
+/// Highest knockout threshold a ticket may choose (90% of margin).
+const MAX_MAINT_BPS: u64 = 9_000;
+/// Minimum force-close window regardless of leverage (resolution risk floor, §6.3).
+const FORCE_WINDOW_MS: u64 = 120_000;
+/// Keeper monitoring interval assumed by the leverage formulas (§6.2, §7).
+const EPOCH_DELTA_MS: u64 = 5_000;
+const BPS: u128 = 10_000;
 
 // === Errors ===
-const ENotKeeper: u64 = 0;
-const EWrongManager: u64 = 1;
-const EZeroQuantity: u64 = 2;
-const EZeroMargin: u64 = 3;
-/// Pool has less idle liquidity than the requested borrow/withdraw.
-const EInsufficientLiquidity: u64 = 4;
-/// Realized mint cost exceeded the leverage-authorized notional.
-const ESlippageExceeded: u64 = 5;
+const EZeroQuantity: u64 = 0;
+const EZeroMargin: u64 = 1;
+/// Pool has less idle liquidity than the requested reserve/withdrawal.
+const EInsufficientLiquidity: u64 = 2;
+/// basis > 50× margin.
+const ELeverageTooHigh: u64 = 3;
 /// Position is healthy — not eligible for liquidation.
-const ENotLiquidatable: u64 = 6;
-/// LP share is for a different pool.
-const EWrongPool: u64 = 7;
-/// Requested leverage exceeds the hard backstop.
-const ELeverageTooHigh: u64 = 8;
+const ENotLiquidatable: u64 = 4;
+/// LP share belongs to a different pool.
+const EWrongPool: u64 = 5;
+/// Caller is not the ticket/order owner.
+const ENotOwner: u64 = 6;
+/// maint_bps out of (0, MAX_MAINT_BPS].
+const EBadMaintenance: u64 = 7;
+/// Market expires inside the force window — too late to open.
+const ETooCloseToExpiry: u64 = 8;
+/// force_close conditions not met: position is outside the dynamic τ_c window
+/// and equity still covers the next epoch fee.
+const EForceWindowNotReached: u64 = 9;
+/// Quoted basis ≥ max payout — nothing to reserve (degenerate mark).
+const EBasisTooHigh: u64 = 10;
+/// TP/SL not set on the ticket, or the condition is not yet satisfied.
+const EConditionNotMet: u64 = 11;
+/// Limit order's TTL has elapsed — use expire_limit instead.
+const EOrderExpired: u64 = 12;
+/// Ask hasn't crossed the limit basis — condition not met.
+const ELimitNotCrossed: u64 = 13;
 
 // === Events ===
 
-public struct PoolCreated has copy, drop { pool_id: ID }
+public struct PoolCreated has copy, drop {
+    pool_id: ID,
+    perf_bps: u64,
+    penalty_bps: u64,
+    open_fee_bps: u64,
+}
 
-public struct LeverageOpened has copy, drop {
+public struct TicketOpened has copy, drop {
     book_id: ID,
     position_id: u64,
     owner: address,
     is_range: bool,
     qty: u64,
-    cost: u64,
-    debt: u64,
-    entry_mark: u64,
+    margin: u64,
+    basis: u64,
+    reserved: u64,
+    maint_bps: u64,
+    expiry: u64,
+    tp_value: u64,
+    sl_value: u64,
+    /// Dynamic force-close window in ms (model §6.2). Keeper must call
+    /// force_close by expiry − force_window_ms at the latest.
+    force_window_ms: u64,
 }
 
-public struct LeverageClosed has copy, drop {
+public struct TicketClosed has copy, drop {
     book_id: ID,
     position_id: u64,
     owner: address,
-    payout: u64,
-    debt_repaid: u64,
-    equity_to_owner: u64,
+    value: u64,
+    equity: u64,
+    to_owner: u64,
+    to_insurance: u64,
+    returned_to_pool: u64,
     liquidated: bool,
 }
 
-public struct MarginAdded has copy, drop {
+public struct TpSlUpdated has copy, drop {
     book_id: ID,
     position_id: u64,
-    amount: u64,
-    debt_after: u64,
+    tp_value: u64,
+    sl_value: u64,
+}
+
+public struct LimitBookCreated has copy, drop {
+    limit_book_id: ID,
+}
+
+public struct LimitOrderPlaced has copy, drop {
+    limit_book_id: ID,
+    order_id: u64,
+    owner: address,
+    is_range: bool,
+    qty: u64,
+    escrow: u64,
+    limit_basis: u64,
+    order_ttl: u64,
+}
+
+public struct LimitOrderExecuted has copy, drop {
+    limit_book_id: ID,
+    order_id: u64,
+    owner: address,
+    position_id: u64,
+    basis: u64,
+}
+
+public struct LimitOrderCancelled has copy, drop {
+    limit_book_id: ID,
+    order_id: u64,
+    owner: address,
+    refunded: u64,
 }
 
 // === Structs ===
 
-/// Quote (dUSDC) lending pool + Earn vault. Pool value = idle `liquidity` +
-/// `total_debt` lent out. Yield to LPs = open fees + performance fees joined into
-/// `liquidity` (raising the share price). `insurance` is a fee-funded backstop
-/// for bad debt / liquidation penalties.
+/// Counterparty pool + Earn vault. `reserved_out` is the book value of payout
+/// reserves locked in open tickets; pool value = idle liquidity + reserves.
+/// LP yield = open fees + performance fees + knockout penalties + trader
+/// losses; LP downside per ticket is bounded by its reserve, paid at open.
 public struct MarginPool<phantom Quote> has key {
     id: UID,
     liquidity: Balance<Quote>,
-    total_debt: u64,
+    reserved_out: u64,
     insurance: Balance<Quote>,
     total_shares: u64,
+    perf_bps: u64,
+    penalty_bps: u64,
+    open_fee_bps: u64,
 }
 
 /// An LP's pro-rata claim on a `MarginPool`.
@@ -111,83 +182,194 @@ public struct LpShare<phantom Quote> has key, store {
     shares: u64,
 }
 
-/// Holds open leveraged positions so the keeper can reach them by id.
+/// Holds open tickets, reachable by id (permissionless liquidation needs this).
 public struct LeverageBook<phantom Quote> has key {
     id: UID,
-    positions: Table<u64, LeveragedPosition<Quote>>,
+    positions: Table<u64, Ticket<Quote>>,
     next_id: u64,
 }
 
-/// One leveraged claim: collateral shares held against pool debt. `store`-only —
-/// it lives inside the book's table and is consumed on close.
-public struct LeveragedPosition<phantom Quote> has store {
-    vault_id: ID,
+/// One turbo ticket. `funds` seals margin + reserve — every coin that can ever
+/// leave the position is inside it from open. `store`-only: lives in the book's
+/// table and is consumed on close.
+///
+/// tp_value / sl_value: live bid·qty levels at which the ticket closes
+/// permissionlessly (0 = disabled). Set at open or via set_tp_sl.
+public struct Ticket<phantom Quote> has store {
     owner: address,
-    token: PositionToken,
-    debt: u64,
-    init_margin: u64,
-    entry_mark: u64,
-    maint_bps: u64,
+    funds: Balance<Quote>,
+    margin: u64,
+    basis: u64,
+    reserved: u64,
+    qty: u64,
+    // market key (binary: strike/is_up; range: lower/higher)
+    oracle_id: ID,
     expiry: u64,
+    is_range: bool,
+    strike: u64,
+    is_up: bool,
+    lower: u64,
+    higher: u64,
+    maint_bps: u64,
     opened_at: u64,
+    // conditional exits (0 = not set)
+    tp_value: u64,
+    sl_value: u64,
 }
 
-// === Pure math helpers (unit-tested without Predict) ===
+/// Holds resting limit-entry orders with sealed escrow. An order fills
+/// permissionlessly when the vault's ask crosses limit_basis.
+public struct LimitBook<phantom Quote> has key {
+    id: UID,
+    orders: Table<u64, LimitOrder<Quote>>,
+    next_id: u64,
+}
+
+/// A single limit-entry order. Escrow = margin committed; fills when the ask
+/// for (oracle_id, expiry, key, qty) is ≤ limit_basis. order_ttl is the
+/// wall-clock ms timestamp after which the order can be expired by anyone.
+public struct LimitOrder<phantom Quote> has store {
+    owner: address,
+    escrow: Balance<Quote>,
+    oracle_id: ID,
+    expiry: u64,
+    is_range: bool,
+    strike: u64,
+    is_up: bool,
+    lower: u64,
+    higher: u64,
+    qty: u64,
+    maint_bps: u64,
+    limit_basis: u64,
+    order_ttl: u64,
+    tp_value: u64,
+    sl_value: u64,
+}
+
+// === Pure math (the entire money flow — unit-tested exhaustively) ===
 
 fun mul_bps(x: u64, bps: u64): u64 { (((x as u128) * (bps as u128)) / BPS) as u64 }
 
-/// Per-contract mark (1e9-scaled) implied by a raw `cost` over `qty` contracts.
-fun price_of(cost: u64, qty: u64): u64 { (((cost as u128) * FLOAT) / (qty as u128)) as u64 }
-
-/// Decompose a realized open into (debt, init_margin, repay_to_pool, refund).
-/// `margin` is net of fee; `cost ≤ margin·leverage` must hold (caller asserts).
-/// Margin is spent before borrow, so borrowed-used = max(0, cost − margin).
-public(package) fun reconcile_open(margin: u64, leverage_bps: u64, cost: u64): (u64, u64, u64, u64) {
-    let e = mul_bps(margin, leverage_bps);
-    let borrow = e - margin;
-    let borrowed_used = if (cost > margin) cost - margin else 0;
-    let debt = borrowed_used;
-    let init_margin = cost - debt;
-    let repay = borrow - borrowed_used;
-    let refund = if (margin > cost) margin - cost else 0;
-    (debt, init_margin, repay, refund)
+/// Dynamic force-close window τ_c in ms (model §6.2 eq. 8).
+///
+/// τ_c = [3·(qty/margin)·φ(0)/(1−θ)]²·5s
+///     = 716_045_445_000·qty² / (denom_bps²·margin²)   ms
+///
+/// Conservative ATM upper bound: φ(0) ≈ 3989/10000, z=3, Δt=5 s.
+/// Floored at FORCE_WINDOW_MS (resolution-risk minimum, §6.3).
+fun force_close_window_ms(qty: u64, margin: u64, maint_bps: u64): u64 {
+    let denom_bps = BPS - (maint_bps as u128);
+    let num = 716_045_445_000u128 * (qty as u128) * (qty as u128);
+    let den = denom_bps * denom_bps * (margin as u128) * (margin as u128);
+    let tc = num / den;
+    // Cap at 24 h; floor at the resolution-risk minimum.
+    let capped = if (tc > 86_400_000u128) { 86_400_000u64 } else { tc as u64 };
+    if (capped > FORCE_WINDOW_MS) { capped } else { FORCE_WINDOW_MS }
 }
 
-/// Health ≤ maintenance ⇔ value ≤ debt + maint_bps·init_margin/1e4.
-public(package) fun is_liquidatable_at(value: u64, debt: u64, init_margin: u64, maint_bps: u64): bool {
-    value <= debt + mul_bps(init_margin, maint_bps)
+/// Per-epoch maintenance fee (model §7 eq. 12, κ=1).
+///
+/// f_epoch = basis·p(1−p)·Δt / τ
+///
+/// Fires when equity falls below this: the position can no longer afford
+/// one more monitoring interval at the current mark and remaining tenor.
+/// Returns 0 for degenerate inputs (mark at boundary, zero tau).
+fun epoch_fee(basis: u64, qty: u64, value: u64, tau_ms: u64): u64 {
+    if (value == 0 || value >= qty || tau_ms == 0) return 0;
+    // p_bps = p scaled to BPS; pp = p(1−p) in 1/BPS units (max ≈ 2500 at ATM).
+    let p_bps = (value as u128) * BPS / (qty as u128);
+    let pp = p_bps * (BPS - p_bps) / BPS;
+    // f_epoch = basis·pp·Δt / (BPS·τ)
+    let num = (basis as u128) * pp * (EPOCH_DELTA_MS as u128);
+    let den = BPS * (tau_ms as u128);
+    (num / den) as u64
 }
 
-// === Pool: lifecycle ===
+/// Ticket equity at mark-value `value` (= bid·qty, raw quote units):
+/// clip(margin + value − basis, 0, margin + reserved).
+public fun equity_of(margin: u64, basis: u64, value: u64, reserved: u64): u64 {
+    let up = margin + value;
+    if (up <= basis) return 0;
+    let x = up - basis;
+    let cap = margin + reserved;
+    if (x > cap) cap else x
+}
 
-/// Create and share a margin pool for `Quote`.
-public fun create_pool<Quote>(ctx: &mut TxContext): ID {
+/// Knockout test: X ≤ maint_bps·margin/1e4 ⇔ value + margin ≤ basis + maint·margin
+/// (all-additive form — no underflow).
+public fun is_liquidatable_at(margin: u64, basis: u64, value: u64, maint_bps: u64): bool {
+    value + margin <= basis + mul_bps(margin, maint_bps)
+}
+
+/// Settlement split for any exit. Returns (to_owner, to_insurance); the pool
+/// keeps `margin + reserved − to_owner − to_insurance`.
+///   close/force-close : perf fee on profit only (stays with the pool as LP yield)
+///   liquidation       : penalty = min(X, penalty_bps·margin) → insurance,
+///                       residual rebate → owner (model §2; kinder than confiscation
+///                       and keeps Prop. 3's expected-cost identity exact)
+public fun settle_amounts(
+    margin: u64,
+    basis: u64,
+    reserved: u64,
+    value: u64,
+    perf_bps: u64,
+    penalty_bps: u64,
+    is_liquidation: bool,
+): (u64, u64) {
+    let x = equity_of(margin, basis, value, reserved);
+    if (is_liquidation) {
+        let penalty = mul_bps(margin, penalty_bps).min(x);
+        (x - penalty, penalty)
+    } else {
+        let perf = if (x > margin) mul_bps(x - margin, perf_bps) else 0;
+        (x - perf, 0)
+    }
+}
+
+// === Pool lifecycle ===
+
+/// Create and share a margin pool. Fee/penalty schedule is fixed at creation so
+/// every later flow is permissionless without parameter games.
+public fun create_pool<Quote>(
+    perf_bps: u64,
+    penalty_bps: u64,
+    open_fee_bps: u64,
+    ctx: &mut TxContext,
+): ID {
     let pool = MarginPool<Quote> {
         id: object::new(ctx),
         liquidity: balance::zero(),
-        total_debt: 0,
+        reserved_out: 0,
         insurance: balance::zero(),
         total_shares: 0,
+        perf_bps,
+        penalty_bps,
+        open_fee_bps,
     };
     let pool_id = object::id(&pool);
-    event::emit(PoolCreated { pool_id });
+    event::emit(PoolCreated { pool_id, perf_bps, penalty_bps, open_fee_bps });
     transfer::share_object(pool);
     pool_id
 }
 
-/// Create and share the book that custodies leveraged positions.
+/// Create and share the ticket book.
 public fun create_book<Quote>(ctx: &mut TxContext): ID {
-    let book = LeverageBook<Quote> {
-        id: object::new(ctx),
-        positions: table::new(ctx),
-        next_id: 0,
-    };
+    let book = LeverageBook<Quote> { id: object::new(ctx), positions: table::new(ctx), next_id: 0 };
     let book_id = object::id(&book);
     transfer::share_object(book);
     book_id
 }
 
-/// Supply quote to the pool; mint LP shares pro-rata to pool value.
+/// Create and share the limit-entry order book.
+public fun create_limit_book<Quote>(ctx: &mut TxContext): ID {
+    let lb = LimitBook<Quote> { id: object::new(ctx), orders: table::new(ctx), next_id: 0 };
+    let limit_book_id = object::id(&lb);
+    event::emit(LimitBookCreated { limit_book_id });
+    transfer::share_object(lb);
+    limit_book_id
+}
+
+/// Supply quote; mint LP shares pro-rata to pool value.
 public fun supply<Quote>(pool: &mut MarginPool<Quote>, payment: Coin<Quote>, ctx: &mut TxContext): LpShare<Quote> {
     let amount = payment.value();
     assert!(amount > 0, EZeroMargin);
@@ -202,7 +384,8 @@ public fun supply<Quote>(pool: &mut MarginPool<Quote>, payment: Coin<Quote>, ctx
     LpShare { id: object::new(ctx), pool_id: object::id(pool), shares }
 }
 
-/// Burn an LP share and withdraw the pro-rata quote (idle liquidity only).
+/// Burn an LP share; withdraw the pro-rata value from IDLE liquidity only
+/// (capital locked as ticket reserves cannot be pulled out from under traders).
 public fun withdraw<Quote>(pool: &mut MarginPool<Quote>, share: LpShare<Quote>, ctx: &mut TxContext): Coin<Quote> {
     let LpShare { id, pool_id, shares } = share;
     assert!(pool_id == object::id(pool), EWrongPool);
@@ -213,419 +396,654 @@ public fun withdraw<Quote>(pool: &mut MarginPool<Quote>, share: LpShare<Quote>, 
     pool.liquidity.split(amount).into_coin(ctx)
 }
 
-// === Pool: internal lend/repay ===
+// === Pool internals ===
 
-/// Draw `amount` of idle liquidity as debt.
-public(package) fun borrow<Quote>(pool: &mut MarginPool<Quote>, amount: u64): Balance<Quote> {
+/// Lock `amount` of idle liquidity as a ticket reserve.
+public(package) fun reserve<Quote>(pool: &mut MarginPool<Quote>, amount: u64): Balance<Quote> {
     assert!(pool.liquidity.value() >= amount, EInsufficientLiquidity);
-    pool.total_debt = pool.total_debt + amount;
+    pool.reserved_out = pool.reserved_out + amount;
     pool.liquidity.split(amount)
 }
 
-/// Repay a loan: clear `principal` from outstanding debt and return `funds` to
-/// liquidity. If `funds < principal` (bad debt), the shortfall is a realized
-/// pool loss reflected in `pool_value`.
-public(package) fun repay_loan<Quote>(pool: &mut MarginPool<Quote>, principal: u64, funds: Balance<Quote>) {
-    pool.total_debt = if (principal >= pool.total_debt) 0 else pool.total_debt - principal;
+/// Return a ticket's remaining funds and release its reserve from the books.
+/// `funds` < reserve ⇒ realized pool loss (the trader won — paid from the
+/// reserve locked at open, never from anyone else); > ⇒ realized pool profit.
+public(package) fun release<Quote>(pool: &mut MarginPool<Quote>, reserved: u64, funds: Balance<Quote>) {
+    pool.reserved_out = pool.reserved_out - reserved;
     pool.liquidity.join(funds);
 }
 
 // === Open ===
 
-/// Charge the open fee (→ insurance), compute authorized notional, borrow the
-/// gap, and return (combined funding coin, net margin, authorized notional).
-fun charge_and_fund<Quote>(
-    pool: &mut MarginPool<Quote>,
-    mut margin: Coin<Quote>,
-    leverage_bps: u64,
-    open_fee_bps: u64,
-    ctx: &mut TxContext,
-): (Coin<Quote>, u64, u64) {
-    assert!(leverage_bps <= MAX_LEVERAGE_BPS, ELeverageTooHigh);
-    let margin_in = margin.value();
-    assert!(margin_in > 0, EZeroMargin);
-    let fee = mul_bps(margin_in, open_fee_bps);
-    if (fee > 0) { pool.insurance.join(margin.split(fee, ctx).into_balance()); };
-    let m = margin.value();
-    let e = mul_bps(m, leverage_bps);
-    let mut funding = margin.into_balance();
-    funding.join(borrow(pool, e - m));
-    (funding.into_coin(ctx), m, e)
-}
-
-/// Post-mint reconciliation: assert slippage, repay unused borrow, refund unused
-/// margin to `owner`. Returns (debt, init_margin).
-fun settle_open<Quote>(
-    pool: &mut MarginPool<Quote>,
-    manager: &mut PredictManager,
-    owner: address,
-    m: u64,
-    leverage_bps: u64,
-    e: u64,
-    cost: u64,
-    ctx: &mut TxContext,
-): (u64, u64) {
-    assert!(cost <= e, ESlippageExceeded);
-    let (debt, init_margin, repay, _refund) = reconcile_open(m, leverage_bps, cost);
-    let leftover = e - cost;
-    if (leftover > 0) {
-        let mut excess = manager.withdraw<Quote>(leftover, ctx).into_balance();
-        if (repay > 0) repay_loan(pool, repay, excess.split(repay));
-        if (excess.value() > 0) transfer::public_transfer(excess.into_coin(ctx), owner)
-        else excess.destroy_zero();
-    };
-    (debt, init_margin)
-}
-
-fun book_position<Quote>(
-    book: &mut LeverageBook<Quote>,
-    vault_id: ID,
-    owner: address,
-    token: PositionToken,
-    debt: u64,
-    init_margin: u64,
-    entry_mark: u64,
-    maint_bps: u64,
-    expiry: u64,
-    is_range: bool,
-    qty: u64,
-    cost: u64,
-    clock: &Clock,
-): u64 {
-    let position = LeveragedPosition<Quote> {
-        vault_id,
-        owner,
-        token,
-        debt,
-        init_margin,
-        entry_mark,
-        maint_bps,
-        expiry,
-        opened_at: clock.timestamp_ms(),
-    };
-    let position_id = book.next_id;
-    book.next_id = position_id + 1;
-    book.positions.add(position_id, position);
-    event::emit(LeverageOpened {
-        book_id: object::id(book),
-        position_id,
-        owner,
-        is_range,
-        qty,
-        cost,
-        debt,
-        entry_mark,
-    });
-    position_id
-}
-
-/// Keeper-side leveraged open of a binary (continuous-strike) position.
-/// `owner` is the original requester. Returns the position id.
-public fun open_leveraged_binary<Quote>(
+/// Open a turbo ticket on a binary (continuous-strike) key. Trader-signed —
+/// no keeper, no manager: the pool is the counterparty and the mark is read
+/// from Predict's public quote. Returns the position id.
+///
+/// tp_value / sl_value: bid·qty levels for permissionless conditional close
+/// (0 = disabled). Can also be set/updated later via set_tp_sl.
+public fun open_binary<Quote>(
     pool: &mut MarginPool<Quote>,
     book: &mut LeverageBook<Quote>,
-    vault: &CeridaVault<Quote>,
-    manager: &mut PredictManager,
-    predict: &mut Predict,
+    predict: &Predict,
     oracle: &OracleSVI,
-    owner: address,
     oracle_id: ID,
     expiry: u64,
     strike: u64,
     is_up: bool,
     margin: Coin<Quote>,
     qty: u64,
-    leverage_bps: u64,
     maint_bps: u64,
-    open_fee_bps: u64,
+    tp_value: u64,
+    sl_value: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): u64 {
-    assert!(ctx.sender() == vault.keeper(), ENotKeeper);
-    assert!(object::id(manager) == vault.manager_id(), EWrongManager);
-    assert!(qty > 0, EZeroQuantity);
-
-    let (funding, m, e) = charge_and_fund(pool, margin, leverage_bps, open_fee_bps, ctx);
-    manager.deposit(funding, ctx);
-
-    let before = manager.balance<Quote>();
-    predict::mint<Quote>(predict, manager, oracle, market_key::new(oracle_id, expiry, strike, is_up), qty, clock, ctx);
-    let cost = before - manager.balance<Quote>();
-
-    let (debt, init_margin) = settle_open(pool, manager, owner, m, leverage_bps, e, cost, ctx);
-    let token = position_token::new_binary(object::id(vault), oracle_id, expiry, strike, is_up, qty, ctx);
-    book_position(book, object::id(vault), owner, token, debt, init_margin, price_of(cost, qty), maint_bps, expiry, false, qty, cost, clock)
+    let key = market_key::new(oracle_id, expiry, strike, is_up);
+    let (basis, _bid) = predict::get_trade_amounts(predict, oracle, key, qty, clock);
+    open_ticket(pool, book, ctx.sender(), basis, oracle_id, expiry, false, strike, is_up, 0, 0, margin, qty, maint_bps, tp_value, sl_value, clock, ctx)
 }
 
-/// Keeper-side leveraged open of a vertical-range position.
-public fun open_leveraged_range<Quote>(
+/// Open a turbo ticket on a vertical-range key.
+public fun open_range<Quote>(
     pool: &mut MarginPool<Quote>,
     book: &mut LeverageBook<Quote>,
-    vault: &CeridaVault<Quote>,
-    manager: &mut PredictManager,
-    predict: &mut Predict,
+    predict: &Predict,
     oracle: &OracleSVI,
-    owner: address,
     oracle_id: ID,
     expiry: u64,
     lower: u64,
     higher: u64,
     margin: Coin<Quote>,
     qty: u64,
-    leverage_bps: u64,
     maint_bps: u64,
-    open_fee_bps: u64,
+    tp_value: u64,
+    sl_value: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): u64 {
-    assert!(ctx.sender() == vault.keeper(), ENotKeeper);
-    assert!(object::id(manager) == vault.manager_id(), EWrongManager);
+    let key = range_key::new(oracle_id, expiry, lower, higher);
+    let (basis, _bid) = predict::get_range_trade_amounts(predict, oracle, key, qty, clock);
+    open_ticket(pool, book, ctx.sender(), basis, oracle_id, expiry, true, 0, false, lower, higher, margin, qty, maint_bps, tp_value, sl_value, clock, ctx)
+}
+
+public(package) fun open_ticket<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    owner: address,
+    basis: u64,
+    oracle_id: ID,
+    expiry: u64,
+    is_range: bool,
+    strike: u64,
+    is_up: bool,
+    lower: u64,
+    higher: u64,
+    mut margin: Coin<Quote>,
+    qty: u64,
+    maint_bps: u64,
+    tp_value: u64,
+    sl_value: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): u64 {
     assert!(qty > 0, EZeroQuantity);
+    assert!(maint_bps > 0 && maint_bps <= MAX_MAINT_BPS, EBadMaintenance);
+    // Max payout of qty contracts is qty (raw quote units: $1 each).
+    assert!(basis < qty, EBasisTooHigh);
 
-    let (funding, m, e) = charge_and_fund(pool, margin, leverage_bps, open_fee_bps, ctx);
-    manager.deposit(funding, ctx);
+    // Open fee → insurance; remainder is the working margin.
+    let gross = margin.value();
+    assert!(gross > 0, EZeroMargin);
+    let fee = mul_bps(gross, pool.open_fee_bps);
+    if (fee > 0) { pool.insurance.join(margin.split(fee, ctx).into_balance()); };
+    let m = margin.value();
+    assert!(m > 0, EZeroMargin);
+    assert!(basis <= mul_bps(m, MAX_LEVERAGE_BPS), ELeverageTooHigh);
 
-    let before = manager.balance<Quote>();
-    predict::mint_range<Quote>(predict, manager, oracle, range_key::new(oracle_id, expiry, lower, higher), qty, clock, ctx);
-    let cost = before - manager.balance<Quote>();
+    // Reject opens inside the dynamic force-close window (§6.2).
+    // Uses net margin m so the window accounts for the actual leverage.
+    let window_ms = force_close_window_ms(qty, m, maint_bps);
+    assert!(clock.timestamp_ms() + window_ms < expiry, ETooCloseToExpiry);
 
-    let (debt, init_margin) = settle_open(pool, manager, owner, m, leverage_bps, e, cost, ctx);
-    let token = position_token::new_range(object::id(vault), oracle_id, expiry, lower, higher, qty, ctx);
-    book_position(book, object::id(vault), owner, token, debt, init_margin, price_of(cost, qty), maint_bps, expiry, true, qty, cost, clock)
-}
+    // Seal margin + full reserve into the ticket (Prop. 2: nothing can ever be owed).
+    let reserved = qty - basis;
+    let mut funds = margin.into_balance();
+    funds.join(reserve(pool, reserved));
 
-// === Margin management ===
-
-/// Pay down a position's debt (de-risk). Permissionless — it only reduces risk.
-public fun add_margin<Quote>(
-    pool: &mut MarginPool<Quote>,
-    book: &mut LeverageBook<Quote>,
-    position_id: u64,
-    payment: Coin<Quote>,
-) {
-    let amount = payment.value();
-    let book_id = object::id(book);
-    let pos = &mut book.positions[position_id];
-    let principal = if (amount >= pos.debt) pos.debt else amount;
-    pos.debt = pos.debt - principal;
-    let debt_after = pos.debt;
-    repay_loan(pool, principal, payment.into_balance());
-    event::emit(MarginAdded { book_id, position_id, amount, debt_after });
-}
-
-// === Close / liquidate / force-close ===
-
-/// Owner-requested close (keeper executes the owner-gated redeem).
-public fun close<Quote>(
-    pool: &mut MarginPool<Quote>,
-    book: &mut LeverageBook<Quote>,
-    vault: &CeridaVault<Quote>,
-    manager: &mut PredictManager,
-    predict: &mut Predict,
-    oracle: &OracleSVI,
-    position_id: u64,
-    perf_bps: u64,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(ctx.sender() == vault.keeper(), ENotKeeper);
-    assert!(object::id(manager) == vault.manager_id(), EWrongManager);
-    settle_close(pool, book, manager, predict, oracle, position_id, perf_bps, false, clock, ctx);
-}
-
-/// Liquidate an underwater position — health is verified on-chain (via the live
-/// redeem value) BEFORE the irreversible redeem.
-public fun liquidate<Quote>(
-    pool: &mut MarginPool<Quote>,
-    book: &mut LeverageBook<Quote>,
-    vault: &CeridaVault<Quote>,
-    manager: &mut PredictManager,
-    predict: &mut Predict,
-    oracle: &OracleSVI,
-    position_id: u64,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(ctx.sender() == vault.keeper(), ENotKeeper);
-    assert!(object::id(manager) == vault.manager_id(), EWrongManager);
-    settle_close(pool, book, manager, predict, oracle, position_id, 0, true, clock, ctx);
-}
-
-/// Keeper force-close inside the pre-settlement window — flatten before the
-/// oracle resolves so a leveraged position never carries the $1/$0 gap.
-public fun force_close<Quote>(
-    pool: &mut MarginPool<Quote>,
-    book: &mut LeverageBook<Quote>,
-    vault: &CeridaVault<Quote>,
-    manager: &mut PredictManager,
-    predict: &mut Predict,
-    oracle: &OracleSVI,
-    position_id: u64,
-    perf_bps: u64,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(ctx.sender() == vault.keeper(), ENotKeeper);
-    assert!(object::id(manager) == vault.manager_id(), EWrongManager);
-    settle_close(pool, book, manager, predict, oracle, position_id, perf_bps, false, clock, ctx);
-}
-
-/// Shared settlement: (liquidation only) verify health, redeem the shares, repay
-/// the loan, take the performance fee or liquidation penalty, pay the owner.
-fun settle_close<Quote>(
-    pool: &mut MarginPool<Quote>,
-    book: &mut LeverageBook<Quote>,
-    manager: &mut PredictManager,
-    predict: &mut Predict,
-    oracle: &OracleSVI,
-    position_id: u64,
-    perf_bps: u64,
-    is_liquidation: bool,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    let LeveragedPosition {
-        vault_id: _, owner, token, debt, init_margin, entry_mark: _, maint_bps, expiry, opened_at: _,
-    } = book.positions.remove(position_id);
-
-    let oracle_id = token.oracle_id();
-    let qty = token.qty();
-    let is_range = token.is_range();
-
-    // Liquidation gate: value the position at the live bid BEFORE redeeming.
-    if (is_liquidation) {
-        let value = if (is_range) {
-            let (_ask, bid) = predict::get_range_trade_amounts(
-                predict, oracle, range_key::new(oracle_id, expiry, token.lower(), token.higher()), qty, clock,
-            );
-            bid
-        } else {
-            let (_ask, bid) = predict::get_trade_amounts(
-                predict, oracle, market_key::new(oracle_id, expiry, token.strike(), token.is_up()), qty, clock,
-            );
-            bid
-        };
-        assert!(is_liquidatable_at(value, debt, init_margin, maint_bps), ENotLiquidatable);
-    };
-
-    let before = manager.balance<Quote>();
-    if (is_range) {
-        predict::redeem_range<Quote>(predict, manager, oracle, range_key::new(oracle_id, expiry, token.lower(), token.higher()), qty, clock, ctx);
-    } else {
-        predict::redeem<Quote>(predict, manager, oracle, market_key::new(oracle_id, expiry, token.strike(), token.is_up()), qty, clock, ctx);
-    };
-    let payout = manager.balance<Quote>() - before;
-
-    // Pool is made whole first (debt principal cleared; shortfall = pool loss).
-    let repaid = if (payout >= debt) debt else payout;
-    if (repaid > 0) repay_loan(pool, debt, manager.withdraw<Quote>(repaid, ctx).into_balance());
-    let equity = payout - repaid;
-
-    let equity_to_owner = if (is_liquidation) {
-        // Penalty: residual equity backstops the pool.
-        if (equity > 0) { pool.insurance.join(manager.withdraw<Quote>(equity, ctx).into_balance()); };
-        0
-    } else {
-        let perf_fee = if (equity > init_margin) mul_bps(equity - init_margin, perf_bps) else 0;
-        if (perf_fee > 0) { pool.liquidity.join(manager.withdraw<Quote>(perf_fee, ctx).into_balance()); };
-        let to_owner = equity - perf_fee;
-        if (to_owner > 0) transfer::public_transfer(manager.withdraw<Quote>(to_owner, ctx), owner);
-        to_owner
-    };
-
-    position_token::burn(token);
-    event::emit(LeverageClosed {
+    let position_id = book.next_id;
+    book.next_id = position_id + 1;
+    book.positions.add(position_id, Ticket<Quote> {
+        owner,
+        funds,
+        margin: m,
+        basis,
+        reserved,
+        qty,
+        oracle_id,
+        expiry,
+        is_range,
+        strike,
+        is_up,
+        lower,
+        higher,
+        maint_bps,
+        opened_at: clock.timestamp_ms(),
+        tp_value,
+        sl_value,
+    });
+    event::emit(TicketOpened {
         book_id: object::id(book),
         position_id,
         owner,
-        payout,
-        debt_repaid: repaid,
-        equity_to_owner,
-        liquidated: is_liquidation,
+        is_range,
+        qty,
+        margin: m,
+        basis,
+        reserved,
+        maint_bps,
+        expiry,
+        tp_value,
+        sl_value,
+        force_window_ms: window_ms,
     });
+    position_id
 }
 
-// === Getters ===
+// === TP / SL ===
 
-public fun pool_value<Quote>(pool: &MarginPool<Quote>): u64 { pool.liquidity.value() + pool.total_debt }
-public fun pool_liquidity<Quote>(pool: &MarginPool<Quote>): u64 { pool.liquidity.value() }
-public fun pool_debt<Quote>(pool: &MarginPool<Quote>): u64 { pool.total_debt }
-public fun pool_insurance<Quote>(pool: &MarginPool<Quote>): u64 { pool.insurance.value() }
-public fun pool_total_shares<Quote>(pool: &MarginPool<Quote>): u64 { pool.total_shares }
-public fun lp_shares<Quote>(share: &LpShare<Quote>): u64 { share.shares }
-
-public fun has_position<Quote>(book: &LeverageBook<Quote>, position_id: u64): bool {
-    book.positions.contains(position_id)
-}
-public fun position_debt<Quote>(book: &LeverageBook<Quote>, position_id: u64): u64 {
-    book.positions[position_id].debt
-}
-public fun position_init_margin<Quote>(book: &LeverageBook<Quote>, position_id: u64): u64 {
-    book.positions[position_id].init_margin
-}
-public fun position_entry_mark<Quote>(book: &LeverageBook<Quote>, position_id: u64): u64 {
-    book.positions[position_id].entry_mark
-}
-public fun position_owner<Quote>(book: &LeverageBook<Quote>, position_id: u64): address {
-    book.positions[position_id].owner
+/// Owner-signed: set or update the conditional-exit levels. Pass 0 to disable.
+/// tp_value: close when live bid·qty >= tp_value (take-profit).
+/// sl_value: close when live bid·qty <= sl_value (stop-loss; must be > 0 to enable).
+public fun set_tp_sl<Quote>(
+    book: &mut LeverageBook<Quote>,
+    position_id: u64,
+    tp_value: u64,
+    sl_value: u64,
+    ctx: &TxContext,
+) {
+    assert!(book.positions[position_id].owner == ctx.sender(), ENotOwner);
+    let book_id = object::id(book);
+    let pos = &mut book.positions[position_id];
+    pos.tp_value = tp_value;
+    pos.sl_value = sl_value;
+    event::emit(TpSlUpdated { book_id, position_id, tp_value, sl_value });
 }
 
-/// Live health view: returns (value = bid·qty, liquidation threshold). The
-/// position is liquidatable iff value ≤ threshold.
-public fun position_health<Quote>(
-    book: &LeverageBook<Quote>,
+/// Permissionless take-profit execution. Fires when live bid·qty >= ticket.tp_value.
+/// Settles with close semantics (perf fee on profit, no penalty).
+public fun execute_tp<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
     predict: &Predict,
     oracle: &OracleSVI,
     position_id: u64,
     clock: &Clock,
-): (u64, u64) {
+    ctx: &mut TxContext,
+) {
     let pos = &book.positions[position_id];
-    let oracle_id = pos.token.oracle_id();
-    let qty = pos.token.qty();
-    let value = if (pos.token.is_range()) {
-        let (_ask, bid) = predict::get_range_trade_amounts(
-            predict, oracle, range_key::new(oracle_id, pos.expiry, pos.token.lower(), pos.token.higher()), qty, clock,
-        );
+    let tp = pos.tp_value;
+    assert!(tp > 0, EConditionNotMet);
+    let value = ticket_value(pos, predict, oracle, clock);
+    assert!(value >= tp, EConditionNotMet);
+    settle(pool, book, predict, oracle, position_id, false, clock, ctx);
+}
+
+/// Permissionless stop-loss execution. Fires when live bid·qty <= ticket.sl_value.
+/// Settles with close semantics (perf fee on profit, no penalty).
+public fun execute_sl<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    position_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let pos = &book.positions[position_id];
+    let sl = pos.sl_value;
+    assert!(sl > 0, EConditionNotMet);
+    let value = ticket_value(pos, predict, oracle, clock);
+    assert!(value <= sl, EConditionNotMet);
+    settle(pool, book, predict, oracle, position_id, false, clock, ctx);
+}
+
+// === Limit orders ===
+
+/// Place a binary limit-entry order. Margin is escrowed immediately; the order
+/// fills permissionlessly when `get_trade_amounts` returns basis ≤ limit_basis.
+/// order_ttl: ms timestamp after which the order expires (anyone may call expire_limit).
+/// tp_value / sl_value: forwarded to the opened ticket (0 = disabled).
+#[allow(lint(self_transfer))]
+public fun place_limit_binary<Quote>(
+    limit_book: &mut LimitBook<Quote>,
+    oracle_id: ID,
+    expiry: u64,
+    strike: u64,
+    is_up: bool,
+    qty: u64,
+    maint_bps: u64,
+    limit_basis: u64,
+    order_ttl: u64,
+    tp_value: u64,
+    sl_value: u64,
+    escrow: Coin<Quote>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): u64 {
+    place_order(limit_book, ctx.sender(), false, oracle_id, expiry, strike, is_up, 0, 0, qty, maint_bps, limit_basis, order_ttl, tp_value, sl_value, escrow, clock)
+}
+
+/// Place a range limit-entry order.
+#[allow(lint(self_transfer))]
+public fun place_limit_range<Quote>(
+    limit_book: &mut LimitBook<Quote>,
+    oracle_id: ID,
+    expiry: u64,
+    lower: u64,
+    higher: u64,
+    qty: u64,
+    maint_bps: u64,
+    limit_basis: u64,
+    order_ttl: u64,
+    tp_value: u64,
+    sl_value: u64,
+    escrow: Coin<Quote>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): u64 {
+    place_order(limit_book, ctx.sender(), true, oracle_id, expiry, 0, false, lower, higher, qty, maint_bps, limit_basis, order_ttl, tp_value, sl_value, escrow, clock)
+}
+
+fun place_order<Quote>(
+    limit_book: &mut LimitBook<Quote>,
+    owner: address,
+    is_range: bool,
+    oracle_id: ID,
+    expiry: u64,
+    strike: u64,
+    is_up: bool,
+    lower: u64,
+    higher: u64,
+    qty: u64,
+    maint_bps: u64,
+    limit_basis: u64,
+    order_ttl: u64,
+    tp_value: u64,
+    sl_value: u64,
+    escrow: Coin<Quote>,
+    clock: &Clock,
+): u64 {
+    assert!(qty > 0, EZeroQuantity);
+    assert!(maint_bps > 0 && maint_bps <= MAX_MAINT_BPS, EBadMaintenance);
+    assert!(clock.timestamp_ms() < order_ttl, EOrderExpired);
+    let escrow_amount = escrow.value();
+    assert!(escrow_amount > 0, EZeroMargin);
+    let order_id = limit_book.next_id;
+    limit_book.next_id = order_id + 1;
+    limit_book.orders.add(order_id, LimitOrder<Quote> {
+        owner,
+        escrow: escrow.into_balance(),
+        oracle_id,
+        expiry,
+        is_range,
+        strike,
+        is_up,
+        lower,
+        higher,
+        qty,
+        maint_bps,
+        limit_basis,
+        order_ttl,
+        tp_value,
+        sl_value,
+    });
+    event::emit(LimitOrderPlaced {
+        limit_book_id: object::id(limit_book),
+        order_id,
+        owner,
+        is_range,
+        qty,
+        escrow: escrow_amount,
+        limit_basis,
+        order_ttl,
+    });
+    order_id
+}
+
+/// Permissionless fill: opens a turbo ticket for the order owner when the live
+/// ask crosses limit_basis. Aborts if the order is expired or condition unmet.
+public fun execute_limit<Quote>(
+    pool: &mut MarginPool<Quote>,
+    leverage_book: &mut LeverageBook<Quote>,
+    limit_book: &mut LimitBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    order_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let order = &limit_book.orders[order_id];
+    assert!(clock.timestamp_ms() <= order.order_ttl, EOrderExpired);
+
+    // Fetch live ask and verify the condition.
+    let basis = if (order.is_range) {
+        let key = range_key::new(order.oracle_id, order.expiry, order.lower, order.higher);
+        let (ask, _) = predict::get_range_trade_amounts(predict, oracle, key, order.qty, clock);
+        ask
+    } else {
+        let key = market_key::new(order.oracle_id, order.expiry, order.strike, order.is_up);
+        let (ask, _) = predict::get_trade_amounts(predict, oracle, key, order.qty, clock);
+        ask
+    };
+    assert!(basis <= order.limit_basis, ELimitNotCrossed);
+
+    // Extract order fields, remove from book.
+    let LimitOrder {
+        owner, escrow, oracle_id, expiry, is_range, strike, is_up, lower, higher,
+        qty, maint_bps, limit_basis: _, order_ttl: _, tp_value, sl_value,
+    } = limit_book.orders.remove(order_id);
+
+    let limit_book_id = object::id(limit_book);
+    let margin = escrow.into_coin(ctx);
+
+    // Open the ticket on behalf of the original owner.
+    let position_id = open_ticket(
+        pool, leverage_book, owner, basis,
+        oracle_id, expiry, is_range, strike, is_up, lower, higher,
+        margin, qty, maint_bps, tp_value, sl_value, clock, ctx,
+    );
+
+    event::emit(LimitOrderExecuted { limit_book_id, order_id, owner, position_id, basis });
+}
+
+/// Owner cancels a resting order and recovers the escrow.
+public fun cancel_limit<Quote>(
+    limit_book: &mut LimitBook<Quote>,
+    order_id: u64,
+    ctx: &mut TxContext,
+): Coin<Quote> {
+    assert!(limit_book.orders[order_id].owner == ctx.sender(), ENotOwner);
+    let LimitOrder { owner, escrow, .. } = limit_book.orders.remove(order_id);
+    let refunded = escrow.value();
+    event::emit(LimitOrderCancelled {
+        limit_book_id: object::id(limit_book),
+        order_id,
+        owner,
+        refunded,
+    });
+    escrow.into_coin(ctx)
+}
+
+/// Anyone may expire an order whose TTL has elapsed; escrow is returned to the owner.
+public fun expire_limit<Quote>(
+    limit_book: &mut LimitBook<Quote>,
+    order_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<Quote> {
+    let order = &limit_book.orders[order_id];
+    assert!(clock.timestamp_ms() > order.order_ttl, EOrderExpired);
+    let owner = order.owner;
+    let LimitOrder { owner: _, escrow, .. } = limit_book.orders.remove(order_id);
+    let refunded = escrow.value();
+    event::emit(LimitOrderCancelled {
+        limit_book_id: object::id(limit_book),
+        order_id,
+        owner,
+        refunded,
+    });
+    escrow.into_coin(ctx)
+}
+
+// === Margin management ===
+
+/// Top up a ticket's margin: lowers the knockout barrier and raises the equity
+/// cap. Permissionless — adding funds only de-risks.
+public fun add_margin<Quote>(book: &mut LeverageBook<Quote>, position_id: u64, payment: Coin<Quote>) {
+    let pos = &mut book.positions[position_id];
+    pos.margin = pos.margin + payment.value();
+    pos.funds.join(payment.into_balance());
+}
+
+// === Close / liquidate / force-close ===
+
+/// Owner-signed voluntary close at the live bid.
+public fun close<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    position_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(book.positions[position_id].owner == ctx.sender(), ENotOwner);
+    settle(pool, book, predict, oracle, position_id, false, clock, ctx);
+}
+
+/// Permissionless liquidation — health is verified on-chain from the live bid
+/// BEFORE settling, so a healthy ticket cannot be touched by anyone.
+public fun liquidate<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    position_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let pos = &book.positions[position_id];
+    let value = ticket_value(pos, predict, oracle, clock);
+    assert!(is_liquidatable_at(pos.margin, pos.basis, value, pos.maint_bps), ENotLiquidatable);
+    settle(pool, book, predict, oracle, position_id, true, clock, ctx);
+}
+
+/// Permissionless force-close. Eligible when either condition holds (§6.2/§7):
+///   (a) remaining tenor < dynamic τ_c window (leverage × mark × keeper latency), OR
+///   (b) current equity < next epoch fee (position can't afford another monitoring interval).
+/// No penalty — close semantics (perf fee on profit only).
+public fun force_close<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    position_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let pos = &book.positions[position_id];
+    let expiry = pos.expiry;
+    let now = clock.timestamp_ms();
+    let window_ms = force_close_window_ms(pos.qty, pos.margin, pos.maint_bps);
+
+    // Condition (a): inside the dynamic τ_c window.
+    let in_window = now + window_ms >= expiry;
+    if (!in_window) {
+        // Condition (b): equity < epoch fee — too expensive to hold one more interval.
+        let value = ticket_value(pos, predict, oracle, clock);
+        let tau_ms = if (expiry > now) { expiry - now } else { 1 };
+        let fee = epoch_fee(pos.basis, pos.qty, value, tau_ms);
+        let equity = equity_of(pos.margin, pos.basis, value, pos.reserved);
+        assert!(equity < fee, EForceWindowNotReached);
+    };
+
+    settle(pool, book, predict, oracle, position_id, false, clock, ctx);
+}
+
+/// Shared settlement: value at the live bid → pure split → pay out → release
+/// the reserve. Total outflow can never exceed the ticket's sealed funds.
+public(package) fun settle<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    position_id: u64,
+    is_liquidation: bool,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let pos = &book.positions[position_id];
+    let value = ticket_value(pos, predict, oracle, clock);
+
+    let Ticket {
+        owner, mut funds, margin, basis, reserved, qty: _, oracle_id: _, expiry: _,
+        is_range: _, strike: _, is_up: _, lower: _, higher: _, maint_bps: _, opened_at: _,
+        tp_value: _, sl_value: _,
+    } = book.positions.remove(position_id);
+
+    let (to_owner, to_insurance) =
+        settle_amounts(margin, basis, reserved, value, pool.perf_bps, pool.penalty_bps, is_liquidation);
+    let equity = to_owner + to_insurance;
+
+    if (to_owner > 0) {
+        transfer::public_transfer(funds.split(to_owner).into_coin(ctx), owner);
+    };
+    if (to_insurance > 0) {
+        pool.insurance.join(funds.split(to_insurance));
+    };
+    let returned = funds.value();
+    release(pool, reserved, funds);
+
+    event::emit(TicketClosed {
+        book_id: object::id(book),
+        position_id,
+        owner,
+        value,
+        equity,
+        to_owner,
+        to_insurance,
+        returned_to_pool: returned,
+        liquidated: is_liquidation,
+    });
+}
+
+/// Live bid value of a ticket's key for its full quantity.
+fun ticket_value<Quote>(pos: &Ticket<Quote>, predict: &Predict, oracle: &OracleSVI, clock: &Clock): u64 {
+    if (pos.is_range) {
+        let key = range_key::new(pos.oracle_id, pos.expiry, pos.lower, pos.higher);
+        let (_ask, bid) = predict::get_range_trade_amounts(predict, oracle, key, pos.qty, clock);
         bid
     } else {
-        let (_ask, bid) = predict::get_trade_amounts(
-            predict, oracle, market_key::new(oracle_id, pos.expiry, pos.token.strike(), pos.token.is_up()), qty, clock,
-        );
+        let key = market_key::new(pos.oracle_id, pos.expiry, pos.strike, pos.is_up);
+        let (_ask, bid) = predict::get_trade_amounts(predict, oracle, key, pos.qty, clock);
         bid
-    };
-    (value, pos.debt + mul_bps(pos.init_margin, pos.maint_bps))
+    }
+}
+
+// === Getters ===
+
+public fun pool_value<Quote>(pool: &MarginPool<Quote>): u64 { pool.liquidity.value() + pool.reserved_out }
+public fun pool_liquidity<Quote>(pool: &MarginPool<Quote>): u64 { pool.liquidity.value() }
+public fun pool_reserved<Quote>(pool: &MarginPool<Quote>): u64 { pool.reserved_out }
+public fun pool_insurance<Quote>(pool: &MarginPool<Quote>): u64 { pool.insurance.value() }
+public fun pool_total_shares<Quote>(pool: &MarginPool<Quote>): u64 { pool.total_shares }
+public fun lp_shares<Quote>(share: &LpShare<Quote>): u64 { share.shares }
+
+public fun has_position<Quote>(book: &LeverageBook<Quote>, id: u64): bool { book.positions.contains(id) }
+public fun position_owner<Quote>(book: &LeverageBook<Quote>, id: u64): address { book.positions[id].owner }
+public fun position_margin<Quote>(book: &LeverageBook<Quote>, id: u64): u64 { book.positions[id].margin }
+public fun position_basis<Quote>(book: &LeverageBook<Quote>, id: u64): u64 { book.positions[id].basis }
+public fun position_reserved<Quote>(book: &LeverageBook<Quote>, id: u64): u64 { book.positions[id].reserved }
+public fun position_funds<Quote>(book: &LeverageBook<Quote>, id: u64): u64 { book.positions[id].funds.value() }
+public fun position_tp<Quote>(book: &LeverageBook<Quote>, id: u64): u64 { book.positions[id].tp_value }
+public fun position_sl<Quote>(book: &LeverageBook<Quote>, id: u64): u64 { book.positions[id].sl_value }
+
+/// Current dynamic force-close window for a position (re-derived on the fly from
+/// stored qty/margin/maint_bps). Keeper calls force_close by expiry − this value.
+public fun position_force_window<Quote>(book: &LeverageBook<Quote>, id: u64): u64 {
+    let p = &book.positions[id];
+    force_close_window_ms(p.qty, p.margin, p.maint_bps)
+}
+
+public fun has_order<Quote>(lb: &LimitBook<Quote>, id: u64): bool { lb.orders.contains(id) }
+public fun order_owner<Quote>(lb: &LimitBook<Quote>, id: u64): address { lb.orders[id].owner }
+public fun order_escrow<Quote>(lb: &LimitBook<Quote>, id: u64): u64 { lb.orders[id].escrow.value() }
+public fun order_limit_basis<Quote>(lb: &LimitBook<Quote>, id: u64): u64 { lb.orders[id].limit_basis }
+
+/// Live health view: (value, liquidation threshold value). Liquidatable iff
+/// value + margin ≤ basis + maint·margin — i.e. value ≤ threshold.
+public fun position_health<Quote>(
+    book: &LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    id: u64,
+    clock: &Clock,
+): (u64, u64) {
+    let pos = &book.positions[id];
+    let value = ticket_value(pos, predict, oracle, clock);
+    let threshold = pos.basis + mul_bps(pos.margin, pos.maint_bps) - pos.margin;
+    (value, threshold)
 }
 
 // === Test-only ===
 
 #[test_only]
-public fun new_position_for_testing<Quote>(
-    token: PositionToken,
-    debt: u64,
-    init_margin: u64,
-    maint_bps: u64,
-): LeveragedPosition<Quote> {
-    LeveragedPosition<Quote> {
-        vault_id: object::id_from_address(@0x0),
-        owner: @0xB0,
-        token,
-        debt,
-        init_margin,
-        entry_mark: 0,
-        maint_bps,
-        expiry: 0,
-        opened_at: 0,
-    }
-}
-
-#[test_only]
-public fun destroy_position_for_testing<Quote>(pos: LeveragedPosition<Quote>) {
-    let LeveragedPosition { vault_id: _, owner: _, token, debt: _, init_margin: _, entry_mark: _, maint_bps: _, expiry: _, opened_at: _ } = pos;
-    position_token::burn(token);
-}
-
-#[test_only]
 public fun mul_bps_for_testing(x: u64, bps: u64): u64 { mul_bps(x, bps) }
 
 #[test_only]
-public fun price_of_for_testing(cost: u64, qty: u64): u64 { price_of(cost, qty) }
+public fun force_close_window_ms_for_testing(qty: u64, margin: u64, maint_bps: u64): u64 {
+    force_close_window_ms(qty, margin, maint_bps)
+}
+
+#[test_only]
+public fun epoch_fee_for_testing(basis: u64, qty: u64, value: u64, tau_ms: u64): u64 {
+    epoch_fee(basis, qty, value, tau_ms)
+}
+
+#[test_only]
+/// Seed the insurance fund directly (unit tests have no open-fee flow).
+public fun seed_insurance_for_testing<Quote>(pool: &mut MarginPool<Quote>, funds: Balance<Quote>) {
+    pool.insurance.join(funds);
+}
+
+#[test_only]
+/// Insert a ticket without Predict (basis/value supplied by the test). Funds
+/// must equal margin + reserved, with the reserve drawn from the pool.
+/// Pass expiry=0 for tests that don't need force-close timing; otherwise
+/// pass a future timestamp (ms) to test dynamic force-window logic.
+public fun open_for_testing<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    owner: address,
+    margin: Coin<Quote>,
+    basis: u64,
+    qty: u64,
+    maint_bps: u64,
+    expiry: u64,
+): u64 {
+    let m = margin.value();
+    let reserved = qty - basis;
+    let mut funds = margin.into_balance();
+    funds.join(reserve(pool, reserved));
+    let position_id = book.next_id;
+    book.next_id = position_id + 1;
+    book.positions.add(position_id, Ticket<Quote> {
+        owner, funds, margin: m, basis, reserved, qty,
+        oracle_id: object::id_from_address(@0xABC), expiry, is_range: false,
+        strike: 0, is_up: true, lower: 0, higher: 0, maint_bps, opened_at: 0,
+        tp_value: 0, sl_value: 0,
+    });
+    position_id
+}
+
+#[test_only]
+/// Settle a ticket at a test-supplied value (no Predict), mirroring `settle`.
+public fun settle_for_testing<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    position_id: u64,
+    value: u64,
+    is_liquidation: bool,
+    ctx: &mut TxContext,
+): (u64, u64, u64) {
+    let Ticket { owner, mut funds, margin, basis, reserved, .. } = book.positions.remove(position_id);
+    let (to_owner, to_insurance) =
+        settle_amounts(margin, basis, reserved, value, pool.perf_bps, pool.penalty_bps, is_liquidation);
+    if (to_owner > 0) {
+        transfer::public_transfer(funds.split(to_owner).into_coin(ctx), owner);
+    };
+    if (to_insurance > 0) { pool.insurance.join(funds.split(to_insurance)); };
+    let returned = funds.value();
+    release(pool, reserved, funds);
+    (to_owner, to_insurance, returned)
+}

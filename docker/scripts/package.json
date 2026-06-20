@@ -10,6 +10,7 @@
     "flow": "bun src/flow.ts",
     "settlement": "bun src/settlement-flow.ts",
     "range-grid": "bun src/range-grid-flow.ts",
+    "limit-order": "bun src/limit-order-flow.ts",
     "all": "bun src/deploy.ts && bun src/setup.ts && bun src/flow.ts"
   },
   "dependencies": {

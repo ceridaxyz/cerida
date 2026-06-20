@@ -153,7 +153,7 @@ export default function OptionsFlow() {
           <span className="text-right">Notional</span>
         </div>
 
-        <div className="flex-1 overflow-auto min-h-0">
+        <div className="flex-1 overflow-auto min-h-0 no-scrollbar">
           {tape.map((row) => (
             <div
               key={row.id}
@@ -186,7 +186,7 @@ export default function OptionsFlow() {
           <span>Net profile</span>
         </div>
 
-        <div className="flex-1 overflow-auto px-3 py-2 min-h-0">
+        <div className="flex-1 overflow-auto px-3 py-2 min-h-0 no-scrollbar">
           {profile.map((row) => {
             const oiPct = (row.oi / maxOi) * 100;
             const netPct = (Math.abs(row.net) / maxAbsNet) * 50;

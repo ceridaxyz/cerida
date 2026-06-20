@@ -26,6 +26,7 @@ const CERIDA_API = process.env.CERIDA_API ?? 'http://127.0.0.1:8788';
 
 type TxResult = Awaited<ReturnType<SuiClient['signAndExecuteTransaction']>>;
 type ParsedEvent = Record<string, unknown>;
+const MIN_GAS_BALANCE = 3_000_000_000n;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`assertion failed: ${message}`);
@@ -78,6 +79,7 @@ async function exec(
   if (opts.gasBudget !== null) {
     tx.setGasBudget(opts.gasBudget ?? 2_000_000_000n);
   }
+  await setFreshGasPayment(c, tx, kp.toSuiAddress(), label);
   let r: TxResult;
   try {
     r = await c.signAndExecuteTransaction({
@@ -97,19 +99,53 @@ async function exec(
   return r;
 }
 
+async function setFreshGasPayment(
+  c: SuiClient,
+  tx: Transaction,
+  owner: string,
+  label: string,
+) {
+  const coins = await c.getCoins({ owner, coinType: '0x2::sui::SUI' });
+  const coin = coins.data.find((item) => BigInt(item.balance) >= MIN_GAS_BALANCE);
+  if (!coin) throw new Error(`no SUI gas coin with at least ${MIN_GAS_BALANCE}`);
+  tx.setGasPayment([
+    {
+      objectId: coin.coinObjectId,
+      version: coin.version,
+      digest: coin.digest,
+    },
+  ]);
+  console.log(`using SUI gas ${coin.coinObjectId}@${coin.version} for ${label}`);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Owned objects (e.g. the dUSDC coin we split from on every mint) advance a
+// version each tx. The fullnode that resolves `tx.object(...)` versions can lag
+// the validator quorum, so a freshly-rebuilt tx may STILL reference a stale
+// version. Rebuild with backoff so the fullnode catches up before retrying.
 async function execRebuiltOnStale(
   c: SuiClient,
   kp: Ed25519Keypair,
   label: string,
   build: () => Transaction | Promise<Transaction>,
+  maxAttempts = 6,
 ) {
-  try {
-    return await exec(c, await build(), kp, `${label} attempt 1`);
-  } catch (err) {
-    if (!isStaleObjectVersion(err)) throw err;
-    console.warn(`${label} hit stale object version; rebuilding tx`);
-    return exec(c, await build(), kp, `${label} attempt 2`);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await exec(c, await build(), kp, `${label} attempt ${attempt}`);
+    } catch (err) {
+      lastErr = err;
+      if (!isStaleObjectVersion(err)) throw err;
+      const wait = 600 * attempt;
+      console.warn(
+        `${label} stale object (attempt ${attempt}/${maxAttempts}); waiting ${wait}ms for fullnode to catch up`,
+      );
+      await sleep(wait);
+    }
   }
+  throw lastErr;
 }
 
 function created(r: any, needle: string): string {
@@ -254,6 +290,7 @@ async function requestRangeIntent(
     qty: bigint;
     escrow: bigint;
     owner: string;
+    maxCost?: bigint;
   },
 ) {
   const r = await execRebuiltOnStale(c, kp, 'request_mint_range', async () => {
@@ -271,6 +308,7 @@ async function requestRangeIntent(
         tx.pure.u64(args.lower),
         tx.pure.u64(args.higher),
         tx.pure.u64(args.qty),
+        tx.pure.u64(args.maxCost ?? 0n), // max_cost=0 → market order
         pay,
       ],
     });

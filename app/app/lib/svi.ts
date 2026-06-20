@@ -6,7 +6,14 @@
 // Black-Scholes risk-neutral probability N(d2) with d2 = (ln(F/K) − w/2) / √w.
 // (Undiscounted, matching Predict's settlement on testnet.)
 
-import type { Svi } from './predict-api';
+// Minimal SVI params (decoupled from any API client).
+export interface Svi {
+  a: number;
+  b: number;
+  rho: number;
+  m: number;
+  sigma: number;
+}
 
 function erf(x: number): number {
   const t = 1 / (1 + 0.3275911 * Math.abs(x));

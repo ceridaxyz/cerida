@@ -43,14 +43,30 @@ fun range_token_roundtrip() {
 
 #[test]
 fun intent_carries_user_and_escrow() {
-    let i = intent::new_binary(USER, oid(), 100, 75_000, true, 50, 500);
+    let i = intent::new_predict_binary(USER, oid(), 100, 75_000, true, 50, 500, 0);
     assert_eq!(i.user(), USER);
     assert_eq!(i.escrowed(), 500);
     assert_eq!(i.qty(), 50);
     assert_eq!(i.is_range(), false);
+    assert_eq!(i.max_cost(), 0);
     let (user, escrowed) = intent::destroy(i);
     assert_eq!(user, USER);
     assert_eq!(escrowed, 500);
+}
+
+#[test]
+fun intent_carries_max_cost() {
+    let i = intent::new_predict_binary(USER, oid(), 100, 75_000, true, 100, 1_000, 450);
+    assert_eq!(i.max_cost(), 450);
+    intent::destroy(i);
+}
+
+#[test]
+fun intent_range_carries_max_cost() {
+    let i = intent::new_predict_range(USER, oid(), 100, 62_000, 64_000, 100, 1_000, 300);
+    assert_eq!(i.max_cost(), 300);
+    assert_eq!(i.is_range(), true);
+    intent::destroy(i);
 }
 
 #[test]
@@ -63,7 +79,7 @@ fun create_then_request_escrows_and_records() {
     s.next_tx(USER);
     let mut v = s.take_shared<CeridaVault<QUOTE>>();
     let coin = coin::mint_for_testing<QUOTE>(500, s.ctx());
-    let intent_id = vault::request_mint_binary(&mut v, oid(), 1_780_000_000_000, 75_000, true, 100, coin, s.ctx());
+    let intent_id = vault::request_mint_binary(&mut v, oid(), 1_780_000_000_000, 75_000, true, 100, 0, coin, s.ctx());
 
     assert_eq!(intent_id, 0);
     assert_eq!(vault::escrow_value(&v), 500);
@@ -187,6 +203,51 @@ fun request_redeem_rejects_excess_qty() {
     let mut v = s.take_shared<CeridaVault<QUOTE>>();
     let token = position_token::new_binary(object::id(&v), oid(), 100, 75_000, true, 100, s.ctx());
     let _ = vault::request_redeem(&mut v, token, 101, s.ctx()); // > qty
+    ts::return_shared(v);
+    s.end();
+}
+
+// === Limit order (cancel) ===
+
+#[test]
+fun cancel_mint_intent_refunds_escrow() {
+    let mut s = ts::begin(KEEPER);
+    vault::create<QUOTE>(s.ctx());
+
+    s.next_tx(USER);
+    let mut v = s.take_shared<CeridaVault<QUOTE>>();
+    let coin = coin::mint_for_testing<QUOTE>(500, s.ctx());
+    let intent_id = vault::request_mint_binary(&mut v, oid(), 100, 75_000, true, 100, 450, coin, s.ctx());
+    assert_eq!(vault::escrow_value(&v), 500);
+    assert!(vault::has_intent(&v, intent_id));
+
+    // user cancels — escrow returns, intent gone
+    vault::cancel_mint_intent(&mut v, intent_id, s.ctx());
+    assert!(!vault::has_intent(&v, intent_id));
+    assert_eq!(vault::escrow_value(&v), 0);
+
+    ts::return_shared(v);
+    s.next_tx(USER);
+    let refund = s.take_from_sender<sui::coin::Coin<QUOTE>>();
+    assert_eq!(refund.value(), 500);
+    coin::burn_for_testing(refund);
+    s.end();
+}
+
+#[test, expected_failure(abort_code = vault::ENotIntentOwner)]
+fun cancel_mint_intent_nonowner_aborts() {
+    let mut s = ts::begin(KEEPER);
+    vault::create<QUOTE>(s.ctx());
+
+    s.next_tx(USER);
+    let mut v = s.take_shared<CeridaVault<QUOTE>>();
+    let coin = coin::mint_for_testing<QUOTE>(500, s.ctx());
+    let intent_id = vault::request_mint_binary(&mut v, oid(), 100, 75_000, true, 100, 0, coin, s.ctx());
+
+    // KEEPER tries to cancel USER's intent — should abort
+    s.next_tx(KEEPER);
+    vault::cancel_mint_intent(&mut v, intent_id, s.ctx());
+
     ts::return_shared(v);
     s.end();
 }

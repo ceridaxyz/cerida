@@ -313,7 +313,15 @@ export default function IvTermStructure() {
 
     plotly.react(host, traces, layout, config);
 
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry && entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+        plotly.Plots.resize(host);
+      }
+    });
+    ro.observe(host);
+
     return () => {
+      ro.disconnect();
       plotly.purge(host);
     };
   }, [data, plotly]);

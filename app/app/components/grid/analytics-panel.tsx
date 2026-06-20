@@ -43,7 +43,7 @@ export default function AnalyticsPanel({ s }: { s: GridState }) {
         </span>
       </div>
 
-      <div className="flex-1 overflow-auto min-h-0">
+      <div className="flex-1 overflow-auto min-h-0 no-scrollbar">
         {tab === 'stats' && <StatsView a={a} price={s.price} />}
         {tab === 'smile' && <SmileView s={s} />}
         {tab === 'dist' && <DistView a={a} />}
@@ -183,6 +183,14 @@ function RangeBar({
 function SmileView({ s }: { s: GridState }) {
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 300, h: 120 });
+  const [hoverPoint, setHoverPoint] = useState<{
+    strike: number;
+    iv: number;
+    atm: boolean;
+    x: number;
+    y: number;
+  } | null>(null);
+
   useEffect(() => {
     if (!ref.current) return;
     const ro = new ResizeObserver(([e]) => {
@@ -218,8 +226,36 @@ function SmileView({ s }: { s: GridState }) {
   const atm = pts.find((p) => p.atm) ?? pts[Math.floor(pts.length / 2)]!;
   const atmI = pts.indexOf(atm);
 
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+
+    let nearestIdx = 0;
+    let minDx = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const px = xOf(i);
+      const dx = Math.abs(px - mx);
+      if (dx < minDx) {
+        minDx = dx;
+        nearestIdx = i;
+      }
+    }
+
+    const p = pts[nearestIdx]!;
+    const px = xOf(nearestIdx);
+    const py = yOf(p.iv);
+
+    setHoverPoint({
+      strike: p.strike,
+      iv: p.iv,
+      atm: !!p.atm,
+      x: px,
+      y: py,
+    });
+  };
+
   return (
-    <div className="flex flex-col h-full px-3 py-2 gap-1.5">
+    <div className="flex flex-col h-full px-3 py-2 gap-1.5 relative">
       {/* compact stat row */}
       <div className="flex items-center gap-4 text-[11px] shrink-0" style={mono}>
         <span className="text-text-tertiary">
@@ -238,7 +274,22 @@ function SmileView({ s }: { s: GridState }) {
 
       {/* chart fills remaining height */}
       <div ref={ref} className="relative flex-1 min-h-0">
-        <svg className="absolute inset-0" width={w} height={h}>
+        <svg
+          className="absolute inset-0 cursor-crosshair"
+          width={w}
+          height={h}
+          onPointerMove={handlePointerMove}
+          onPointerLeave={() => setHoverPoint(null)}
+        >
+          <defs>
+            <filter id="smileGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="1.5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
           {[ivMax, (ivMax + ivMin) / 2, ivMin].map((v, i) => (
             <g key={i}>
               <line x1={PL} x2={w - PR} y1={yOf(v)} y2={yOf(v)} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
@@ -252,7 +303,45 @@ function SmileView({ s }: { s: GridState }) {
           {pts.map((p, i) => (
             <circle key={i} cx={xOf(i)} cy={yOf(p.iv)} r={p.atm ? 3 : 1.6} fill={p.atm ? '#19e6bd' : '#a6a3ff'} />
           ))}
+
+          {hoverPoint && (
+            <>
+              <line
+                x1={hoverPoint.x}
+                x2={hoverPoint.x}
+                y1={PT}
+                y2={h - PB}
+                stroke="rgba(255, 255, 255, 0.25)"
+                strokeWidth={1}
+                strokeDasharray="2 2"
+              />
+              <circle
+                cx={hoverPoint.x}
+                cy={hoverPoint.y}
+                r={4.5}
+                fill="#807dfe"
+                filter="url(#smileGlow)"
+              />
+            </>
+          )}
         </svg>
+
+        {hoverPoint && (
+          <div
+            className="absolute z-20 pointer-events-none rounded-lg border border-white/10 bg-[#0a0c16]/90 backdrop-blur-md px-2 py-1 shadow-2xl flex flex-col gap-0.5"
+            style={{
+              left: Math.min(hoverPoint.x + 10, w - 95),
+              top: Math.max(4, hoverPoint.y - 42),
+            }}
+          >
+            <div className="text-[9px] font-bold text-text-primary" style={mono}>
+              Strike: ${hoverPoint.strike.toFixed(0)}
+            </div>
+            <div className="text-[8.5px] font-semibold text-accent-light" style={mono}>
+              IV: {hoverPoint.iv.toFixed(1)}% {hoverPoint.atm ? '(ATM)' : ''}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* strike axis */}
@@ -269,17 +358,36 @@ function SmileView({ s }: { s: GridState }) {
 
 function DistView({ a }: { a: Analytics }) {
   const max = Math.max(...a.dist.map((d) => d.prob), 0.01);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+
   return (
-    <div className="flex flex-col gap-0.5 px-3 py-2">
+    <div className="flex flex-col gap-0.5 px-3 py-2 relative">
       {a.dist.map((d) => (
-        <div key={d.band.idx} className="flex items-center gap-2 h-5">
+        <div
+          key={d.band.idx}
+          onPointerEnter={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const parentRect = e.currentTarget.parentElement!.getBoundingClientRect();
+            setHoverIdx(d.band.idx);
+            setHoverPos({
+              x: e.clientX - parentRect.left,
+              y: rect.top - parentRect.top,
+            });
+          }}
+          onPointerLeave={() => {
+            setHoverIdx(null);
+            setHoverPos(null);
+          }}
+          className="flex items-center gap-2 h-5 relative hover:bg-surface-hover/30 rounded-[4px] px-1 transition-colors"
+        >
           <span
-            className="text-[9px] text-text-quaternary w-16 shrink-0"
+            className="text-[9px] text-text-quaternary w-16 shrink-0 relative z-10"
             style={mono}
           >
             ${d.band.lower}–{d.band.upper}
           </span>
-          <div className="flex-1 h-3 rounded-[3px] overflow-hidden bg-surface-card/40">
+          <div className="flex-1 h-3 rounded-[3px] overflow-hidden bg-surface-card/40 relative z-10">
             <div
               className="h-full rounded-[3px] transition-all duration-300"
               style={{
@@ -291,13 +399,34 @@ function DistView({ a }: { a: Analytics }) {
             />
           </div>
           <span
-            className="text-[9px] w-8 text-right shrink-0"
+            className="text-[9px] w-8 text-right shrink-0 relative z-10"
             style={{ ...mono, color: d.inPrice ? '#a6a3ff' : 'var(--color-text-tertiary)' }}
           >
             {(d.prob * 100).toFixed(0)}%
           </span>
         </div>
       ))}
+
+      {hoverIdx !== null && hoverPos && (() => {
+        const item = a.dist.find((d) => d.band.idx === hoverIdx);
+        if (!item) return null;
+        return (
+          <div
+            className="absolute z-20 pointer-events-none rounded-lg border border-white/10 bg-[#0a0c16]/95 backdrop-blur-md px-2.5 py-1.5 shadow-2xl flex flex-col gap-0.5"
+            style={{
+              left: Math.min(hoverPos.x + 10, 180),
+              top: Math.max(4, hoverPos.y - 45),
+            }}
+          >
+            <div className="text-[9px] font-bold text-text-primary" style={mono}>
+              ${item.band.lower}–${item.band.upper}
+            </div>
+            <div className="text-[8.5px] font-semibold text-accent-light" style={mono}>
+              Prob: {(item.prob * 100).toFixed(1)}% {item.inPrice ? '(Active)' : ''}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -317,7 +446,7 @@ function FlowView({ a }: { a: Analytics }) {
         <span>Volume by band</span>
         <span style={mono}>${total.toFixed(1)}k total</span>
       </div>
-      <div className="flex flex-col gap-0.5 px-3 py-2 flex-1 overflow-auto">
+      <div className="flex flex-col gap-0.5 px-3 py-2 flex-1 overflow-auto no-scrollbar">
         {vols.map(({ d, vol }) => (
           <div key={d.band.idx} className="flex items-center gap-2 h-5">
             <span className="text-[9px] text-text-quaternary w-16 shrink-0" style={mono}>

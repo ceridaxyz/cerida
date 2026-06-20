@@ -129,7 +129,7 @@ export default function OrderSummary({ s }: { s: GridState }) {
         <span className="text-text-quaternary">{legsArr.length} leg{legsArr.length === 1 ? '' : 's'}</span>
       </div>
 
-      <div className="flex flex-col gap-2.5 px-3 py-2.5 flex-1 overflow-auto">
+      <div className="flex flex-col gap-2.5 px-3 py-2.5 flex-1 overflow-auto no-scrollbar">
 
         {/* Mode toggle */}
         <div className="flex gap-1">
