@@ -59,7 +59,7 @@ const CryptoPrice = lazy(() => import('../../components/market/crypto-price'));
 const IvTermStructure = lazy(
   () => import('../../components/market/iv-term-structure'),
 );
-const OptionsFlow = lazy(() => import('../../components/market/options-flow'));
+const GexProfile = lazy(() => import('../../components/market/gex-profile'));
 const StrikeLandscape = lazy(
   () => import('../../components/grid/strike-landscape'),
 );
@@ -149,14 +149,14 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
     ),
   },
   flow: {
-    label: 'Flow',
+    label: 'GEX',
     w: 6,
     h: 8,
     minW: 4,
     minH: 4,
     render: () => (
       <Suspense fallback={<OrderBookSkeleton />}>
-        <OptionsFlow />
+        <GexProfile />
       </Suspense>
     ),
   },
