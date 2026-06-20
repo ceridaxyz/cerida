@@ -29,9 +29,8 @@ const DIR_COLOR: Record<string, string> = {
 
 // ── Tray ─────────────────────────────────────────────────────────────────────
 
-interface Props { stake: number; onStakeChange: (v: number) => void }
-
-export default function ComboTray({ stake, onStakeChange }: Props) {
+export default function ComboTray() {
+  const [stake, setStake] = useState(10)
   const { legs, open, mode, removeLeg, clear, setOpen, setMode } = useCombo()
   const [expanded, setExpanded] = useState(false)
 
@@ -172,7 +171,7 @@ export default function ComboTray({ stake, onStakeChange }: Props) {
                 <span className="text-text-quaternary text-[10px]">$</span>
                 <input
                   type="number" min={1} value={stake}
-                  onChange={e => onStakeChange(Math.max(1, parseFloat(e.target.value) || 1))}
+                  onChange={e => setStake(Math.max(1, parseFloat(e.target.value) || 1))}
                   className="w-full bg-transparent text-[12px] font-medium text-text-primary outline-none"
                   style={{ fontFamily: 'var(--font-mono)' }}
                 />

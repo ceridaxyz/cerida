@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useRef, useEffect } from 'react';
+import { lazy, memo, Suspense, useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import ReactGridLayout, {
   type Layout,
@@ -236,6 +236,13 @@ const ADD_OPTIONS = (Object.keys(CATALOG) as WidgetType[]).map((type) => ({
   label: CATALOG[type].label,
 }));
 
+// Stable content component — memoized so the type prop changing is the ONLY
+// thing that can trigger a re-render, preventing lazy widget remounts caused
+// by parent re-renders creating new JSX element objects on every call.
+const WidgetContent = memo(function WidgetContent({ type }: { type: WidgetType }) {
+  return <>{CATALOG[type].render()}</>;
+});
+
 // ── Layout helpers — first-fit placement for new widgets ───────────────────────
 
 function overlaps(
@@ -417,7 +424,6 @@ const INITIAL_LAYOUT: Layout = [
 const TradePageInner = () => {
   const [items, setItems] = useState<Item[]>(INITIAL_ITEMS);
   const [layout, setLayout] = useState<Layout>(INITIAL_LAYOUT);
-  const [comboStake, setComboStake] = useState(10);
   const { open: comboOpen, setOpen: setComboOpen } = useCombo();
   const { ref, width, rowHeight } = useGridSize();
   const nextId = useRef(0);
@@ -494,7 +500,7 @@ const TradePageInner = () => {
         <div ref={ref} className="flex-1 overflow-auto">
           <ReactGridLayout
             layout={layout}
-            onLayoutChange={(l: Layout) => setLayout([...l])}
+            onLayoutChange={(l: Layout) => setLayout(l)}
             cols={COLS}
             rowHeight={rowHeight}
             width={width}
@@ -516,7 +522,7 @@ const TradePageInner = () => {
                     tabs={item.tabs.map((t) => ({ id: t.id, label: CATALOG[t.type].label }))}
                     active={item.active}
                     options={ADD_OPTIONS}
-                    content={CATALOG[activeTab.type].render()}
+                    content={<WidgetContent type={activeTab.type} />}
                     onSelect={(i) => selectTab(item.id, i)}
                     onAddTab={(t) => addTab(item.id, t as WidgetType)}
                     onCloseTab={(i) => closeTab(item.id, i)}
@@ -527,7 +533,7 @@ const TradePageInner = () => {
             })}
           </ReactGridLayout>
         </div>
-        <ComboTray stake={comboStake} onStakeChange={setComboStake} />
+        <ComboTray />
       </div>
     </div>
   );
