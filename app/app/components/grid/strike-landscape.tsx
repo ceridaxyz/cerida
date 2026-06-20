@@ -17,13 +17,12 @@ const normPdf = (z: number, s: number) =>
 
 const NUM_LAYERS    = 22
 const SAMPLES       = 220
-const X_MIN         = -5.5   // curves bleed off left — that's intentional
+const X_MIN         = -5.5
 const X_MAX         = 3.8
-const PDF_SCALE     = 160    // px — front layers spike tall
-const LAYER_SPACING = 13     // px between baselines
-const LAYER_DX      = 1.1    // horizontal perspective shift per layer
+const PDF_SCALE     = 160
+const LAYER_SPACING = 13
+const LAYER_DX      = 1.1
 
-// Sigma per layer: front (i=0) = 0.28 (narrow spike), back (i=21) = 3.2 (very wide)
 const sigmaFor = (i: number, ivBoost: number) =>
   (0.28 + (i / (NUM_LAYERS - 1)) * 2.9) * (1 + ivBoost * 0.6)
 
@@ -32,9 +31,9 @@ const sigmaFor = (i: number, ivBoost: number) =>
 interface Props { price?: number }
 
 export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
-  const svgRef  = useRef<SVGSVGElement>(null)
-  const rafRef  = useRef<number>(0)
-  const t0      = useRef(Date.now())
+  const svgRef = useRef<SVGSVGElement>(null)
+  const rafRef = useRef<number>(0)
+  const t0     = useRef(Date.now())
 
   const [price,   setPrice]   = useState(initPrice)
   const [iv,      setIv]      = useState(0.162)
@@ -44,10 +43,8 @@ export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
   const [entered, setEntered] = useState(false)
   const dragging = useRef(false)
 
-  // Mount entrance stagger
   useEffect(() => { const id = setTimeout(() => setEntered(true), 50); return () => clearTimeout(id) }, [])
 
-  // Random walk: price + IV
   useEffect(() => {
     const id = setInterval(() => {
       setPrice(p => p + (Math.random() - 0.49) * 60)
@@ -56,21 +53,18 @@ export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
     return () => clearInterval(id)
   }, [])
 
-  // rAF loop for breathing
   useEffect(() => {
     const loop = () => { setTick(Date.now() - t0.current); rafRef.current = requestAnimationFrame(loop) }
     rafRef.current = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(rafRef.current)
   }, [])
 
-  // Drag
   useEffect(() => {
     const up = () => { dragging.current = false }
     window.addEventListener('pointerup', up)
     return () => window.removeEventListener('pointerup', up)
   }, [])
 
-  // ViewBox — wide aspect ratio like the screenshots
   const W  = 720
   const H  = 230
   const PL = 8
@@ -89,55 +83,49 @@ export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
     return Math.max(X_MIN, Math.min(X_MAX, X_MIN + ((svgX - PL) / CW) * (X_MAX - X_MIN)))
   }
 
-  // Build SVG path for one layer
-  function path(sigma: number, baseY: number, dx: number, fromZ?: number): string {
-    const x0 = fromZ ?? X_MIN
-    const xs  = Array.from({ length: SAMPLES }, (_, k) =>
-      x0 + (k / (SAMPLES - 1)) * (X_MAX - x0),
-    )
+  function buildPath(sigma: number, baseY: number, dx: number, fromZ?: number): string {
+    const x0  = fromZ ?? X_MIN
+    const xs  = Array.from({ length: SAMPLES }, (_, k) => x0 + (k / (SAMPLES - 1)) * (X_MAX - x0))
     const pts = xs.map(x =>
       `${(xToSvg(x) + dx).toFixed(1)},${(baseY - normPdf(x, sigma) * PDF_SCALE).toFixed(1)}`,
     )
     if (fromZ !== undefined) {
-      const sx  = (xToSvg(fromZ) + dx).toFixed(1)
-      const sy  = (baseY - normPdf(fromZ, sigma) * PDF_SCALE).toFixed(1)
-      const ex  = (xToSvg(X_MAX) + dx).toFixed(1)
+      const sx = (xToSvg(fromZ) + dx).toFixed(1)
+      const sy = (baseY - normPdf(fromZ, sigma) * PDF_SCALE).toFixed(1)
+      const ex = (xToSvg(X_MAX) + dx).toFixed(1)
       return `M${sx},${baseY.toFixed(1)} L${sx},${sy} L${pts.join(' L')} L${ex},${baseY.toFixed(1)} Z`
     }
-    const lx = (xToSvg(X_MIN) + dx).toFixed(1)
-    const rx = (xToSvg(X_MAX) + dx).toFixed(1)
-    return `M${lx},${baseY.toFixed(1)} L${pts.join(' L')} L${rx},${baseY.toFixed(1)} Z`
+    return `M${(xToSvg(X_MIN) + dx).toFixed(1)},${baseY.toFixed(1)} L${pts.join(' L')} L${(xToSvg(X_MAX) + dx).toFixed(1)},${baseY.toFixed(1)} Z`
   }
 
-  // Stats
-  const ivBoost     = iv - 0.162
-  const strikeProb  = (1 - normCdf(strikeZ)) * 100
+  const ivBoost      = iv - 0.162
+  const strikeProb   = (1 - normCdf(strikeZ)) * 100
   const impliedPayout = Math.round(1 / (strikeProb / 100))
-  const hoverProb   = hoverZ !== null ? (1 - normCdf(hoverZ)) * 100 : null
+  const hoverProb    = hoverZ !== null ? (1 - normCdf(hoverZ)) * 100 : null
 
-  // Peak connector points
   const peakPts = Array.from({ length: NUM_LAYERS }, (_, i) => {
     const breathe = Math.sin(tick / 2000 + i * 0.4) * 0.018
     const sigma   = sigmaFor(i, ivBoost) * (1 + breathe)
     const baseY   = chartBottom - i * LAYER_SPACING
     const dx      = i * LAYER_DX
-    const py      = baseY - normPdf(0, sigma) * PDF_SCALE
-    return `${(xToSvg(0) + dx).toFixed(1)},${py.toFixed(1)}`
+    return `${(xToSvg(0) + dx).toFixed(1)},${(baseY - normPdf(0, sigma) * PDF_SCALE).toFixed(1)}`
   }).join(' ')
 
-  const xTicks = [-4, -3, -2, -1, 0, 1, 2, 3]
-
-  // Stroke shade per layer: back layers lighter, front darker
+  // Stroke per layer: front = brand-violet hint, back = subtle border
   const strokeFor = (i: number) => {
-    const t = i / (NUM_LAYERS - 1) // 0=front, 1=back
-    const v = Math.round(140 + t * 90) // #8c → #d2
-    return `rgb(${v},${v},${v})`
+    const t = i / (NUM_LAYERS - 1)
+    // front layers: violet-tinted; back layers: dim border color
+    return i < 3
+      ? `rgba(128,125,254,${0.45 - i * 0.1})`
+      : `rgba(255,255,255,${0.06 + (1 - t) * 0.08})`
   }
+
+  const xTicks = [-4, -3, -2, -1, 0, 1, 2, 3]
 
   return (
     <div
       className="flex flex-col h-full overflow-hidden select-none"
-      style={{ background: '#f4f3f1', fontFamily: 'var(--font-mono)' }}
+      style={{ background: 'var(--color-surface-primary)', fontFamily: 'var(--font-mono)' }}
     >
       <style>{`
         @keyframes layerSlideIn {
@@ -145,40 +133,41 @@ export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
           to   { opacity: 1; transform: translateY(0); }
         }
         @keyframes strikePulse {
-          0%,100% { opacity: 0.55; } 50% { opacity: 1; }
+          0%,100% { opacity: 0.45; } 50% { opacity: 0.9; }
         }
       `}</style>
 
-      {/* Terminal-style header */}
+      {/* Header */}
       <div
         className="flex items-center justify-between px-3 shrink-0"
-        style={{ borderBottom: '1px solid #ddd', paddingTop: 6, paddingBottom: 5 }}
+        style={{ borderBottom: '1px solid var(--color-border-default)', paddingTop: 7, paddingBottom: 6 }}
       >
-        <span style={{ fontSize: 8.5, letterSpacing: '0.16em', color: '#888', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: 8.5, letterSpacing: '0.18em', color: 'var(--color-text-quaternary)', textTransform: 'uppercase' }}>
           [Price-Target Density · Crypto Targets
         </span>
         <div className="flex items-center gap-4">
-          <div
-            style={{
-              background: '#111', color: '#fff', fontSize: 9, fontWeight: 700,
-              padding: '2px 8px', letterSpacing: '0.1em',
-            }}
-          >
+          <div style={{
+            background: 'var(--color-surface-card)',
+            border: '1px solid var(--color-border-default)',
+            color: 'var(--color-text-primary)',
+            fontSize: 9, fontWeight: 700,
+            padding: '2px 8px', letterSpacing: '0.1em',
+          }}>
             STRIKE {price.toLocaleString('en-US', { maximumFractionDigits: 0 })}
           </div>
-          <span style={{ fontSize: 8.5, letterSpacing: '0.12em', color: '#888', textTransform: 'uppercase' }}>
-            Tail Zone · Payout +{impliedPayout}×]
+          <span style={{ fontSize: 8.5, letterSpacing: '0.12em', color: 'var(--color-text-quaternary)', textTransform: 'uppercase' }}>
+            Tail Zone · Payout <span style={{ color: 'var(--color-bearish-red)' }}>+{impliedPayout}×</span>]
           </span>
         </div>
       </div>
 
-      {/* SVG chart */}
+      {/* SVG */}
       <div className="flex-1 min-h-0">
         <svg
           ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
           className="w-full h-full"
-          style={{ cursor: dragging.current ? 'ew-resize' : 'crosshair', display: 'block' }}
+          style={{ cursor: 'crosshair', display: 'block' }}
           onMouseMove={e => {
             const z = svgZFromClient(e.clientX)
             if (dragging.current) setStrikeZ(Math.max(-1, Math.min(X_MAX - 0.1, z)))
@@ -195,62 +184,62 @@ export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
               <rect x={PL} y={PT} width={CW} height={H - PT - PB + 4} />
             </clipPath>
             <linearGradient id="sl-tail" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor="#b84040" stopOpacity="0.55" />
-              <stop offset="100%" stopColor="#b84040" stopOpacity="0.08" />
+              <stop offset="0%"   stopColor="#f23546" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#f23546" stopOpacity="0.06" />
+            </linearGradient>
+            <linearGradient id="sl-hover-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stopColor="#807dfe" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#807dfe" stopOpacity="0.03" />
             </linearGradient>
           </defs>
 
-          {/* Draw back → front */}
+          {/* Layers back → front */}
           <g clipPath="url(#sl-clip)">
             {Array.from({ length: NUM_LAYERS }, (_, ri) => {
-              const i      = NUM_LAYERS - 1 - ri  // ri=0 is back (i=21)
+              const i       = NUM_LAYERS - 1 - ri
               const breathe = Math.sin(tick / 2000 + i * 0.4) * 0.018
-              const sigma  = sigmaFor(i, ivBoost) * (1 + breathe)
-              const baseY  = chartBottom - i * LAYER_SPACING
-              const dx     = i * LAYER_DX
-              const full   = path(sigma, baseY, dx)
-              const tail   = path(sigma, baseY, dx, strikeZ)
-              const delay  = entered ? 0 : `${(NUM_LAYERS - i) * 22}ms`
+              const sigma   = sigmaFor(i, ivBoost) * (1 + breathe)
+              const baseY   = chartBottom - i * LAYER_SPACING
+              const dx      = i * LAYER_DX
+              const full    = buildPath(sigma, baseY, dx)
+              const tail    = buildPath(sigma, baseY, dx, strikeZ)
               return (
                 <g
                   key={i}
                   style={entered ? undefined : {
-                    animation: `layerSlideIn 0.4s cubic-bezier(0.22,1,0.36,1) ${delay} both`,
+                    animation: `layerSlideIn 0.4s cubic-bezier(0.22,1,0.36,1) ${(NUM_LAYERS - i) * 22}ms both`,
                   }}
                 >
-                  {/* White fill masks layers behind — creates depth */}
-                  <path d={full} fill="#f4f3f1" />
-                  {/* Curve outline */}
-                  <path d={full} fill="none" stroke={strokeFor(i)} strokeWidth={i < 4 ? '0.9' : '0.75'} />
-                  {/* Red tail zone */}
+                  <path d={full} fill="var(--color-surface-primary)" />
+                  <path d={full} fill="none" stroke={strokeFor(i)} strokeWidth={i < 3 ? '1' : '0.75'} />
                   <path d={tail} fill="url(#sl-tail)" />
                 </g>
               )
             })}
           </g>
 
-          {/* Dashed peak connector */}
+          {/* Peak connector */}
           <polyline
             points={peakPts}
             fill="none"
-            stroke="#bbb"
-            strokeWidth="0.85"
+            stroke="rgba(255,255,255,0.12)"
+            strokeWidth="0.9"
             strokeDasharray="3.5 3"
             clipPath="url(#sl-clip)"
           />
 
-          {/* Strike dashed line through every layer */}
+          {/* Strike dashes per layer */}
           {Array.from({ length: NUM_LAYERS }, (_, i) => {
             const breathe = Math.sin(tick / 2000 + i * 0.4) * 0.018
-            const sigma  = sigmaFor(i, ivBoost) * (1 + breathe)
-            const baseY  = chartBottom - i * LAYER_SPACING
-            const dx     = i * LAYER_DX
-            const px     = xToSvg(strikeZ) + dx
-            const curveY = baseY - normPdf(strikeZ, sigma) * PDF_SCALE
+            const sigma   = sigmaFor(i, ivBoost) * (1 + breathe)
+            const baseY   = chartBottom - i * LAYER_SPACING
+            const dx      = i * LAYER_DX
+            const px      = xToSvg(strikeZ) + dx
+            const curveY  = baseY - normPdf(strikeZ, sigma) * PDF_SCALE
             return (
               <line key={i}
                 x1={px} y1={baseY} x2={px} y2={Math.max(curveY, PT)}
-                stroke="#993333"
+                stroke="var(--color-bearish-red)"
                 strokeWidth="0.65"
                 strokeDasharray="2.5 2"
                 style={{ animation: 'strikePulse 2.2s ease-in-out infinite' }}
@@ -258,63 +247,69 @@ export default function StrikeLandscape({ price: initPrice = 104311 }: Props) {
             )
           })}
 
-          {/* Live price dot (small red circle on front layer at x=0) */}
+          {/* Live price dot on front layer peak */}
           {(() => {
-            const i = 2
-            const sigma = sigmaFor(i, ivBoost)
-            const baseY = chartBottom - i * LAYER_SPACING
-            const dx    = i * LAYER_DX
-            const cx    = xToSvg(0) + dx
-            const cy    = baseY - normPdf(0, sigma) * PDF_SCALE
-            return <circle cx={cx} cy={cy} r="3.5" fill="#cc3333" />
+            const i      = 2
+            const sigma  = sigmaFor(i, ivBoost)
+            const baseY  = chartBottom - i * LAYER_SPACING
+            const dx     = i * LAYER_DX
+            return (
+              <circle
+                cx={xToSvg(0) + dx}
+                cy={baseY - normPdf(0, sigma) * PDF_SCALE}
+                r="3"
+                fill="var(--color-bearish-red)"
+              />
+            )
           })()}
 
-          {/* Hover vertical hairline */}
+          {/* Hover hairline */}
           {hoverZ !== null && (
             <line
               x1={xToSvg(hoverZ)} y1={PT}
               x2={xToSvg(hoverZ) + (NUM_LAYERS - 1) * LAYER_DX} y2={chartBottom}
-              stroke="#aaa" strokeWidth="0.5" strokeDasharray="2 2"
+              stroke="rgba(255,255,255,0.15)" strokeWidth="0.5" strokeDasharray="2 2"
             />
           )}
 
           {/* Tooltip */}
           {hoverZ !== null && (() => {
             const tipX = Math.min(xToSvg(hoverZ) + 12, W - 130)
-            const tipY = PT + 30
+            const tipY = PT + 28
             return (
               <g>
-                <rect x={tipX} y={tipY} width={125} height={66} rx="2"
-                  fill="rgba(255,255,255,0.94)" stroke="#ccc" strokeWidth="0.8" />
-                <text x={tipX + 9} y={tipY + 15} fontSize="8" fill="#999">P(&gt;STRIKE) {(hoverProb ?? 0).toFixed(2)}%</text>
-                <text x={tipX + 9} y={tipY + 34} fontSize="13" fontWeight="700" fill="#b84040">
+                <rect x={tipX} y={tipY} width={122} height={66} rx="3"
+                  fill="#0d0f1a" stroke="#1a1b2e" strokeWidth="0.8" />
+                <text x={tipX + 9} y={tipY + 16} fontSize="8" fill="#6b7280">
+                  P(&gt;STRIKE) {(hoverProb ?? 0).toFixed(2)}%
+                </text>
+                <text x={tipX + 9} y={tipY + 35} fontSize="13" fontWeight="700" fill="#f23546">
                   IMPLIED +{Math.round(1 / Math.max(0.001, (hoverProb ?? 1) / 100))}.0
                 </text>
-                <text x={tipX + 9} y={tipY + 52} fontSize="8" fill="#bbb">
+                <text x={tipX + 9} y={tipY + 52} fontSize="8" fill="#6b7280">
+                  IV {(iv * 100).toFixed(1)}%
+                </text>
+                <text x={tipX + 9} y={tipY + 63} fontSize="7.5" fill="#3a3c50">
                   SESSION z={hoverZ.toFixed(3)}
                 </text>
               </g>
             )
           })()}
 
-          {/* X-axis labels */}
+          {/* X-axis */}
           {xTicks.map(z => (
             <g key={z}>
               <line x1={xToSvg(z)} y1={chartBottom + 1} x2={xToSvg(z)} y2={chartBottom + 4}
-                stroke="#ccc" strokeWidth="0.8" />
+                stroke="#1a1b2e" strokeWidth="0.8" />
               <text x={xToSvg(z)} y={chartBottom + 15}
-                textAnchor="middle" fontSize="8" fill="#bbb">
+                textAnchor="middle" fontSize="8" fill="#3a3c50">
                 {z === 0 ? '0' : `${z > 0 ? '+' : ''}${z}σ`}
               </text>
             </g>
           ))}
 
-          {/* Bottom baseline */}
           <line x1={PL} y1={chartBottom} x2={W - PR} y2={chartBottom}
-            stroke="#ddd" strokeWidth="0.8" />
-
-          {/* Corner bracket */}
-          <text x={PL} y={H - 2} fontSize="9" fill="#ccc">L</text>
+            stroke="#1a1b2e" strokeWidth="0.8" />
         </svg>
       </div>
     </div>
