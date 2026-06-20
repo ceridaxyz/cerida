@@ -8,6 +8,7 @@ import BandPanel from '../../components/grid/band-panel';
 import OrderSummary from '../../components/grid/order-summary';
 import PayoffPanel from '../../components/grid/payoff-panel';
 import AnalyticsPanel from '../../components/grid/analytics-panel';
+import StrikeLandscape from '../../components/grid/strike-landscape';
 
 export const meta = () => [{ title: 'Grid — Cerida' }];
 

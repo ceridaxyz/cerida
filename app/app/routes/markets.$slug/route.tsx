@@ -52,15 +52,15 @@ const TradingPanel = lazy(
 const RangeTrading = lazy(
   () => import('../../components/trading/range-trading'),
 );
-const PredictTrading = lazy(
-  () => import('../../components/trading/predict-trading'),
-);
 const PriceChart = lazy(() => import('../../components/market/price-chart'));
 const CryptoPrice = lazy(() => import('../../components/market/crypto-price'));
 const IvTermStructure = lazy(
   () => import('../../components/market/iv-term-structure'),
 );
 const OptionsFlow = lazy(() => import('../../components/market/options-flow'));
+const StrikeLandscape = lazy(
+  () => import('../../components/grid/strike-landscape'),
+);
 
 // ── Skeletons ──────────────────────────────────────────────────────────────────
 
@@ -106,9 +106,9 @@ type WidgetType =
   | 'flow'
   | 'iv'
   | 'trade'
-  | 'predict'
   | 'range'
   | 'positions'
+  | 'landscape'
   | 'panel';
 
 interface WidgetSpec {
@@ -137,9 +137,9 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
   crypto: {
     label: 'Crypto Price',
     w: 5,
-    h: 6,
+    h: 4,
     minW: 4,
-    minH: 5,
+    minH: 3,
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <CryptoPrice />
@@ -172,10 +172,10 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
   },
   trade: {
     label: 'Trade',
-    w: 8,
-    h: 7,
+    w: 5,
+    h: 4,
     minW: 4,
-    minH: 5,
+    minH: 3,
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <TradingPanel />
@@ -185,24 +185,12 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
   range: {
     label: 'Range',
     w: 5,
-    h: 6,
+    h: 4,
     minW: 4,
-    minH: 5,
+    minH: 3,
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <RangeTrading />
-      </Suspense>
-    ),
-  },
-  predict: {
-    label: 'Predict',
-    w: 5,
-    h: 6,
-    minW: 4,
-    minH: 5,
-    render: () => (
-      <Suspense fallback={<TradeSkeleton />}>
-        <PredictTrading />
       </Suspense>
     ),
   },
@@ -215,6 +203,18 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
     render: () => (
       <Suspense fallback={<BottomTabsSkeleton />}>
         <BottomTabs />
+      </Suspense>
+    ),
+  },
+  landscape: {
+    label: 'Landscape',
+    w: 5,
+    h: 6,
+    minW: 4,
+    minH: 3,
+    render: () => (
+      <Suspense fallback={<OrderBookSkeleton />}>
+        <StrikeLandscape />
       </Suspense>
     ),
   },
@@ -392,22 +392,22 @@ const one = (id: string, type: WidgetType): Item => ({
 
 const INITIAL_ITEMS: Item[] = [
   one('crypto', 'crypto'),
-  one('chart', 'chart'),
   one('flow', 'flow'),
+  one('iv', 'iv'),
+  { id: 'chart', tabs: [{ id: 'chart-t0', type: 'chart' }, { id: 'chart-t1', type: 'landscape' }], active: 0 },
   one('trade', 'trade'),
   one('range', 'range'),
-  one('predict', 'predict'),
-  one('iv', 'iv'),
+  one('positions', 'positions'),
 ];
 
 const INITIAL_LAYOUT: Layout = [
-  { i: 'crypto', x: 0, y: 0, w: 5, h: 6, minW: 4, minH: 5 },
-  { i: 'chart', x: 5, y: 0, w: 9, h: 8, minW: 4, minH: 3 },
-  { i: 'flow', x: 14, y: 0, w: 5, h: 8, minW: 4, minH: 4 },
-  { i: 'trade', x: 19, y: 0, w: 5, h: 6, minW: 4, minH: 3 },
-  { i: 'range', x: 19, y: 5, w: 5, h: 6, minW: 4, minH: 5 },
-  { i: 'predict', x: 0, y: 8, w: 5, h: 6, minW: 4, minH: 5 },
-  { i: 'iv', x: 5, y: 8, w: 14, h: 4, minW: 6, minH: 3 },
+  { i: 'crypto',    x: 0,  y: 0, w: 5,  h: 6,  minW: 4, minH: 3 },
+  { i: 'flow',      x: 0,  y: 6, w: 5,  h: 6,  minW: 4, minH: 3 },
+  { i: 'iv',        x: 5,  y: 0, w: 5,  h: 9,  minW: 4, minH: 3 },
+  { i: 'chart',     x: 10, y: 0, w: 9,  h: 9,  minW: 4, minH: 3 },
+  { i: 'trade',     x: 19, y: 0, w: 5,  h: 6,  minW: 4, minH: 3 },
+  { i: 'range',     x: 19, y: 6, w: 5,  h: 6,  minW: 4, minH: 3 },
+  { i: 'positions', x: 5,  y: 9, w: 14, h: 3,  minW: 6, minH: 2 },
 ];
 
 // ── Page ───────────────────────────────────────────────────────────────────────
