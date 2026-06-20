@@ -316,20 +316,20 @@ export default function GexProfile() {
                 {/* Hover tooltip */}
                 {hovered && (
                   <div
-                    className="absolute z-50 rounded-[10px] border border-border-default shadow-2xl"
+                    className="absolute z-50 rounded-[7px] border border-border-default shadow-xl"
                     style={{
                       left:       'calc(68px + 4px)',
                       top:        '50%',
                       transform:  'translateY(-50%)',
                       background: 'var(--color-surface-card)',
-                      minWidth:   192,
-                      padding:    '10px 14px',
+                      minWidth:   156,
+                      padding:    '6px 10px',
                     }}
                   >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[12px] font-bold text-text-primary">${fmtK(row.strike)}</span>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px] font-bold text-text-primary">${fmtK(row.strike)}</span>
                       <span
-                        className="text-[11px] font-semibold px-2 py-0.5 rounded-[5px]"
+                        className="text-[10px] font-semibold px-1.5 py-px rounded-[4px]"
                         style={{
                           background: row.prob > 0.5 ? 'rgba(11,153,129,0.15)' : 'rgba(242,53,70,0.15)',
                           color:      row.prob > 0.5 ? '#0b9981' : '#f23546',
@@ -340,14 +340,13 @@ export default function GexProfile() {
                     </div>
                     {[
                       ['Net GEX',   fmtM(row.net),    isPos ? '#0b9981' : '#f23546'],
-                      ['YES Gamma', fmtM(row.yesGex), '#0b9981'],
-                      ['NO Gamma',  fmtM(row.noGex),  '#f23546'],
-                      ['Open Int',  fmtM(row.oi),     'var(--color-text-secondary)'],
-                      ['Exp. Move', row.inExpMove ? '✓ inside 1σ' : '— outside', row.inExpMove ? '#807dfe' : 'var(--color-text-quaternary)'],
+                      ['YES Γ',     fmtM(row.yesGex), '#0b9981'],
+                      ['NO Γ',      fmtM(row.noGex),  '#f23546'],
+                      ['OI',        fmtM(row.oi),     'var(--color-text-secondary)'],
                     ].map(([label, val, color]) => (
-                      <div key={label as string} className="flex items-center justify-between mt-1">
-                        <span className="text-[10px] text-text-quaternary">{label}</span>
-                        <span className="text-[10px] font-medium" style={{ color: color as string }}>{val}</span>
+                      <div key={label as string} className="flex items-center justify-between gap-4">
+                        <span className="text-[9px] text-text-quaternary">{label}</span>
+                        <span className="text-[9px] font-medium" style={{ color: color as string }}>{val}</span>
                       </div>
                     ))}
                   </div>
