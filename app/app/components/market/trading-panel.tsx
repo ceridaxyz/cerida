@@ -6,7 +6,7 @@ import {
   animate,
 } from 'framer-motion';
 import { IconChevronDown, IconPlus } from '@tabler/icons-react';
-import { useCombo } from './combo-context';
+import { useComboDispatch } from './combo-context';
 
 const BASE_EDGE = 0.06;
 
@@ -351,7 +351,7 @@ const TradingPanel = () => {
   const [pctSelected, setPctSelected] = useState<number | null>(null);
   const [takeProfitEnabled, setTakeProfitEnabled] = useState(false);
   const [leverage, setLeverage] = useState(1);
-  const { addLeg } = useCombo();
+  const { addLeg } = useComboDispatch();
 
   const isLeverage = leverage > 1;
   const buyLabel = isLeverage ? 'LONG' : 'BUY';

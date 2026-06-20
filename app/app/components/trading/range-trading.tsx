@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { IconPlus } from '@tabler/icons-react'
-import { useCombo } from '../market/combo-context'
+import { useComboDispatch } from '../market/combo-context'
 
 // ── On-chain mapping ────────────────────────────────────────────────────────────
 // A range bet is predict::mint_range over RangeKey(oracle_id, expiry,
@@ -90,7 +90,7 @@ export default function RangeTrading({
   underlying = 'BTC',
   onSubmit,
 }: Props) {
-  const { addLeg } = useCombo()
+  const { addLeg } = useComboDispatch()
   // The oracle's expiry timestamp (fixed by the market, not chosen here).
   const expiry = useMemo(() => oracleExpiry ?? Date.now() + 60 * 60_000, [oracleExpiry])
   // Display strike step scaled to the asset's price magnitude (BTC ~$66k → $250).

@@ -1,17 +1,26 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 
 export interface ComboLeg {
-  id:          string        // stable key — prevents duplicate adds
-  label:       string        // display: "YES BTC/USD", "$99k–$102k"
-  direction:   'yes' | 'no' | 'range'
-  prob:        number        // win probability 0–1
-  multiplier:  number        // payout multiple
+  id:         string
+  label:      string
+  direction:  'yes' | 'no' | 'range'
+  prob:       number
+  multiplier: number
 }
 
-interface ComboCtx {
-  legs:      ComboLeg[]
-  open:      boolean
-  mode:      'combo' | 'parlay'
+// ── State context (re-renders subscribers when legs/open/mode change) ─────────
+
+interface ComboState {
+  legs: ComboLeg[]
+  open: boolean
+  mode: 'combo' | 'parlay'
+}
+
+const ComboStateContext = createContext<ComboState>({ legs: [], open: false, mode: 'combo' })
+
+// ── Dispatch context (stable — never triggers re-renders in subscribers) ──────
+
+interface ComboDispatch {
   addLeg:    (leg: ComboLeg) => void
   removeLeg: (id: string) => void
   clear:     () => void
@@ -19,28 +28,42 @@ interface ComboCtx {
   setMode:   (m: 'combo' | 'parlay') => void
 }
 
-const ComboContext = createContext<ComboCtx>({
-  legs: [], open: false, mode: 'combo',
+const ComboDispatchContext = createContext<ComboDispatch>({
   addLeg: () => {}, removeLeg: () => {}, clear: () => {}, setOpen: () => {}, setMode: () => {},
 })
 
-export const useCombo = () => useContext(ComboContext)
+// ── Hooks ─────────────────────────────────────────────────────────────────────
+
+export const useCombo         = () => ({ ...useContext(ComboStateContext), ...useContext(ComboDispatchContext) })
+export const useComboDispatch = () => useContext(ComboDispatchContext)
+
+// ── Provider ──────────────────────────────────────────────────────────────────
 
 export function ComboProvider({ children }: { children: React.ReactNode }) {
   const [legs, setLegs] = useState<ComboLeg[]>([])
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<'combo' | 'parlay'>('combo')
 
-  const addLeg = (leg: ComboLeg) => {
+  // Stable references — never recreated after mount
+  const addLeg    = useCallback((leg: ComboLeg) => {
     setLegs(prev => prev.some(l => l.id === leg.id) ? prev : [...prev, leg])
     setOpen(true)
-  }
-  const removeLeg = (id: string) => setLegs(prev => prev.filter(l => l.id !== id))
-  const clear     = () => setLegs([])
+  }, [])
+  const removeLeg = useCallback((id: string) => setLegs(prev => prev.filter(l => l.id !== id)), [])
+  const clear     = useCallback(() => setLegs([]), [])
+
+  const dispatch = useMemo<ComboDispatch>(
+    () => ({ addLeg, removeLeg, clear, setOpen, setMode }),
+    [addLeg, removeLeg, clear],
+  )
+
+  const state = useMemo<ComboState>(() => ({ legs, open, mode }), [legs, open, mode])
 
   return (
-    <ComboContext.Provider value={{ legs, open, mode, addLeg, removeLeg, clear, setOpen, setMode }}>
-      {children}
-    </ComboContext.Provider>
+    <ComboDispatchContext.Provider value={dispatch}>
+      <ComboStateContext.Provider value={state}>
+        {children}
+      </ComboStateContext.Provider>
+    </ComboDispatchContext.Provider>
   )
 }
