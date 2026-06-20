@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { IconPlus } from '@tabler/icons-react'
+import { useCombo } from '../market/combo-context'
 
 // ── On-chain mapping ────────────────────────────────────────────────────────────
 // A range bet is predict::mint_range over RangeKey(oracle_id, expiry,
@@ -88,6 +90,7 @@ export default function RangeTrading({
   underlying = 'BTC',
   onSubmit,
 }: Props) {
+  const { addLeg } = useCombo()
   // The oracle's expiry timestamp (fixed by the market, not chosen here).
   const expiry = useMemo(() => oracleExpiry ?? Date.now() + 60 * 60_000, [oracleExpiry])
   // Display strike step scaled to the asset's price magnitude (BTC ~$66k → $250).
@@ -434,7 +437,7 @@ export default function RangeTrading({
           )}
         </AnimatePresence>
 
-        {/* Submit */}
+        {/* Submit + Add to Combo */}
         <button
           disabled={!canSubmit}
           onClick={handleSubmit}
@@ -446,6 +449,29 @@ export default function RangeTrading({
           }}
         >
           Mint Range · ${fmtStrike(lower)}–${fmtStrike(higher)}
+        </button>
+        <button
+          disabled={!canSubmit}
+          onClick={() => {
+            if (!canSubmit) return
+            addLeg({
+              id:        `range-${lower}-${higher}`,
+              label:     `$${fmtStrike(lower)}–$${fmtStrike(higher)}`,
+              direction: 'range',
+              prob:      winProb,
+              multiplier: multiple,
+            })
+          }}
+          className="flex items-center justify-center gap-1.5 w-full py-1.5 text-[11px] font-medium rounded-[7px] shrink-0 transition-colors"
+          style={{
+            background: canSubmit ? 'rgba(128,125,254,0.08)' : 'var(--color-surface-card)',
+            color:      canSubmit ? '#807dfe'                : 'var(--color-text-quaternary)',
+            border:     `1px solid ${canSubmit ? 'rgba(128,125,254,0.2)' : 'var(--color-border-subtle)'}`,
+            cursor:     canSubmit ? 'pointer' : 'not-allowed',
+          }}
+        >
+          <IconPlus size={11} stroke={2.5} />
+          Add to Combo
         </button>
       </div>
     </div>

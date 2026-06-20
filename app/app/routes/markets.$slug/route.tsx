@@ -8,6 +8,8 @@ import 'react-grid-layout/css/styles.css';
 import { IconX, IconPlus } from '@tabler/icons-react';
 import Sidebar from '../../components/sidebar';
 import TopNav from '../../components/market/top-nav';
+import { ComboProvider, useCombo } from '../../components/market/combo-context';
+import ComboTray from '../../components/market/combo-tray';
 
 export const meta = () => [{ title: 'Trade — Cerida' }];
 
@@ -412,9 +414,11 @@ const INITIAL_LAYOUT: Layout = [
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
-const TradePage = () => {
+const TradePageInner = () => {
   const [items, setItems] = useState<Item[]>(INITIAL_ITEMS);
   const [layout, setLayout] = useState<Layout>(INITIAL_LAYOUT);
+  const [comboStake, setComboStake] = useState(10);
+  const { setOpen: setComboOpen } = useCombo();
   const { ref, width, rowHeight } = useGridSize();
   const nextId = useRef(0);
   const prevCount = useRef(items.length);
@@ -478,11 +482,12 @@ const TradePage = () => {
   return (
     <div className="flex h-screen overflow-hidden bg-page">
       <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 relative">
         <div className="px-2 pt-2 shrink-0 relative z-30">
           <TopNav
             addOptions={ADD_OPTIONS}
             onAddWidget={(t) => addWidget(t as WidgetType)}
+            onComboOpen={() => setComboOpen(true)}
           />
         </div>
         <div ref={ref} className="flex-1 overflow-auto">
@@ -521,9 +526,16 @@ const TradePage = () => {
             })}
           </ReactGridLayout>
         </div>
+        <ComboTray stake={comboStake} onStakeChange={setComboStake} />
       </div>
     </div>
   );
 };
+
+const TradePage = () => (
+  <ComboProvider>
+    <TradePageInner />
+  </ComboProvider>
+);
 
 export default TradePage;

@@ -13,6 +13,7 @@ interface AddOption { type: string; label: string }
 interface TopNavProps {
   addOptions?: AddOption[]
   onAddWidget?: (type: string) => void
+  onComboOpen?: () => void
 };
 
 const SearchIcon = () => <IconSearch size={15} stroke={2} />;
@@ -58,7 +59,7 @@ const Island = ({
   </div>
 );
 
-const TopNav = ({ addOptions = [], onAddWidget }: TopNavProps) => {
+const TopNav = ({ addOptions = [], onAddWidget, onComboOpen }: TopNavProps) => {
   const [addOpen, setAddOpen] = useState(false)
   const addRef = useRef<HTMLDivElement>(null)
 
@@ -165,6 +166,21 @@ const TopNav = ({ addOptions = [], onAddWidget }: TopNavProps) => {
             </div>
           )}
         </div>
+
+        {/* Combo */}
+        <button
+          onClick={onComboOpen}
+          className="flex items-center gap-1.5 text-[12px] font-semibold rounded-[10px] px-2.5 py-1.5 transition-all"
+          style={{
+            background: 'rgba(128,125,254,0.1)',
+            color: '#807dfe',
+            border: '1px solid rgba(128,125,254,0.25)',
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(128,125,254,0.18)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(128,125,254,0.1)' }}
+        >
+          Combo
+        </button>
 
         {/* Divider */}
         <div className="w-px h-5 bg-border-subtle mx-0.5" />

@@ -5,7 +5,10 @@ import {
   useMotionValue,
   animate,
 } from 'framer-motion';
-import { IconChevronDown } from '@tabler/icons-react';
+import { IconChevronDown, IconPlus } from '@tabler/icons-react';
+import { useCombo } from './combo-context';
+
+const BASE_EDGE = 0.06;
 
 const MIN_LEV = 1,
   MAX_LEV = 50,
@@ -341,39 +344,53 @@ function LeverageSlider({
 }
 
 const TradingPanel = () => {
-  const [direction, setDirection] = useState<'long' | 'short'>('long');
+  const [direction, setDirection] = useState<'buy' | 'sell'>('buy');
   const [orderType, setOrderType] = useState<'market' | 'limit' | 'pro'>(
     'market',
   );
   const [pctSelected, setPctSelected] = useState<number | null>(null);
   const [takeProfitEnabled, setTakeProfitEnabled] = useState(false);
   const [leverage, setLeverage] = useState(1);
+  const { addLeg } = useCombo();
+
+  const isLeverage = leverage > 1;
+  const buyLabel = isLeverage ? 'LONG' : 'BUY';
+  const sellLabel = isLeverage ? 'SHORT' : 'SELL';
+  // Placeholder cents — wire to live surface data when available
+  const buyCents = 46;
+  const sellCents = 54;
 
   const pctOptions = [10, 25, 50, 75];
 
   return (
     <div className="flex flex-col bg-surface-primary h-full min-w-0">
-      {/* LONG / SHORT toggle */}
+      {/* BUY / SELL (→ LONG / SHORT when leveraged) */}
       <div className="flex border-b border-border-subtle shrink-0">
         <button
-          onClick={() => setDirection('long')}
-          className={`flex-1 py-2 text-[13px] font-semibold tracking-wide transition-colors ${
-            direction === 'long'
-              ? 'bg-surface-hover text-text-primary'
+          onClick={() => setDirection('buy')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 transition-colors ${
+            direction === 'buy'
+              ? 'bg-surface-hover text-bullish-green'
               : 'text-text-tertiary hover:text-text-secondary'
           }`}
         >
-          LONG
+          <span className="text-[15px] font-bold tracking-wide">{buyLabel}</span>
+          <span className={`text-[13px] font-medium tabular-nums ${direction === 'buy' ? 'text-bullish-green/70' : 'text-text-quaternary'}`}>
+            {buyCents}¢
+          </span>
         </button>
         <button
-          onClick={() => setDirection('short')}
-          className={`flex-1 py-2 text-[13px] font-semibold tracking-wide transition-colors ${
-            direction === 'short'
-              ? 'bg-surface-hover text-text-primary'
+          onClick={() => setDirection('sell')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 transition-colors ${
+            direction === 'sell'
+              ? 'bg-surface-hover text-bearish-red'
               : 'text-text-tertiary hover:text-text-secondary'
           }`}
         >
-          SHORT
+          <span className="text-[15px] font-bold tracking-wide">{sellLabel}</span>
+          <span className={`text-[13px] font-medium tabular-nums ${direction === 'sell' ? 'text-bearish-red/70' : 'text-text-quaternary'}`}>
+            {sellCents}¢
+          </span>
         </button>
       </div>
 
@@ -471,23 +488,46 @@ const TradingPanel = () => {
           </span>
           <button
             onClick={() => setTakeProfitEnabled(!takeProfitEnabled)}
-            className={`relative w-9 h-5 rounded-full transition-colors ${
-              takeProfitEnabled ? 'bg-brand-violet' : 'bg-surface-hover'
+            aria-pressed={takeProfitEnabled}
+            className={`h-5 w-9 rounded-pill border p-0.5 transition-colors ${
+              takeProfitEnabled
+                ? 'border-brand-violet bg-brand-violet/20'
+                : 'border-border-default bg-surface-card'
             }`}
           >
             <span
-              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                takeProfitEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'
+              className={`block h-3.5 w-3.5 rounded-pill transition-transform ${
+                takeProfitEnabled
+                  ? 'translate-x-4 bg-brand-violet'
+                  : 'translate-x-0 bg-text-quaternary'
               }`}
             />
           </button>
         </div>
       </div>
 
-      {/* Sign in CTA */}
-      <div className="px-3 pb-3 shrink-0">
+      {/* Sign in CTA + Add to Combo */}
+      <div className="px-3 pb-3 flex flex-col gap-1.5 shrink-0">
         <button className="w-full py-2.5 bg-bullish-green text-[#1a1a1a] text-[13px] font-semibold rounded-[8px] hover:opacity-90 transition-opacity">
           Sign in
+        </button>
+        <button
+          onClick={() => addLeg({
+            id:         `trade-${direction}`,
+            label:      `${direction === 'buy' ? 'YES' : 'NO'} BTC/USD`,
+            direction:  direction === 'buy' ? 'yes' : 'no',
+            prob:       direction === 'buy' ? buyCents / 100 : (100 - buyCents) / 100,
+            multiplier: (1 - BASE_EDGE) / (direction === 'buy' ? buyCents / 100 : (100 - buyCents) / 100),
+          })}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium rounded-[7px] transition-colors"
+          style={{
+            background: 'rgba(128,125,254,0.08)',
+            color:      '#807dfe',
+            border:     '1px solid rgba(128,125,254,0.2)',
+          }}
+        >
+          <IconPlus size={11} stroke={2.5} />
+          Add to Combo
         </button>
       </div>
     </div>
