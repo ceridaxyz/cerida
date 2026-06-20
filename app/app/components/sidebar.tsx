@@ -13,6 +13,7 @@ import {
   IconChevronRight,
 } from '@tabler/icons-react'
 import SettingsModal from './settings-modal'
+import OnboardingModal, { getOnboardingSession, type OnboardingSession } from './onboarding-modal'
 
 const HomeIcon = () => <IconHome size={18} stroke={1.75} />
 const MarketsIcon = () => <IconActivity size={18} stroke={1.75} />
@@ -69,10 +70,27 @@ const NavButton = ({
 const Sidebar = () => {
   const [collapsed, setCollapsed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [session, setSession] = useState<OnboardingSession | null>(null)
 
   useEffect(() => {
     const stored = localStorage.getItem('sidebar-collapsed')
     if (stored !== null) setCollapsed(stored === 'true')
+  }, [])
+
+  useEffect(() => {
+    setSession(getOnboardingSession())
+
+    const onSession = (event: Event) => {
+      setSession((event as CustomEvent<OnboardingSession | null>).detail ?? getOnboardingSession())
+    }
+
+    window.addEventListener('cerida:onboarding-session', onSession)
+    window.addEventListener('storage', onSession)
+    return () => {
+      window.removeEventListener('cerida:onboarding-session', onSession)
+      window.removeEventListener('storage', onSession)
+    }
   }, [])
 
   const toggle = () => {
@@ -128,12 +146,20 @@ const Sidebar = () => {
       {/* Bottom: sign in + collapse */}
       <div className="border-t border-border-subtle shrink-0 p-2 flex flex-col gap-1">
         {collapsed ? (
-          <button className="flex items-center justify-center w-full py-2 rounded-[6px] bg-sign-in-cta text-white hover:opacity-90 transition-opacity">
+          <button
+            onClick={() => setOnboardingOpen(true)}
+            className="flex items-center justify-center w-full py-2 rounded-[6px] bg-sign-in-cta text-white hover:opacity-90 transition-opacity"
+            title={session ? session.label : 'Sign in'}
+          >
             <UserIcon />
           </button>
         ) : (
-          <button className="w-full py-2 bg-sign-in-cta text-white text-[13px] font-medium rounded-[6px] hover:opacity-90 transition-opacity">
-            Sign in
+          <button
+            onClick={() => setOnboardingOpen(true)}
+            className="w-full rounded-[6px] bg-sign-in-cta px-2 py-2 text-white hover:opacity-90 transition-opacity"
+          >
+            <span className="block truncate text-[13px] font-medium">{session ? session.label : 'Sign in'}</span>
+            {session && <span className="block truncate text-[10px] text-white/70">{session.address.slice(0, 6)}...{session.address.slice(-4)}</span>}
           </button>
         )}
 
@@ -147,6 +173,7 @@ const Sidebar = () => {
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <OnboardingModal open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
     </div>
   )
 }
