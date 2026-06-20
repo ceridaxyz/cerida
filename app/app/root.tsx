@@ -1,6 +1,7 @@
 import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router'
 import type { ReactNode } from 'react'
 import type { Route } from './+types/root'
+import { AppProviders } from './components/app-providers'
 import './app.css'
 
 export const Layout = ({ children }: { children: ReactNode }) => (
@@ -19,7 +20,11 @@ export const Layout = ({ children }: { children: ReactNode }) => (
   </html>
 )
 
-const App = () => <Outlet />
+const App = () => (
+  <AppProviders>
+    <Outlet />
+  </AppProviders>
+)
 
 export default App
 

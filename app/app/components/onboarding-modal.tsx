@@ -13,23 +13,19 @@ import {
   IconWallet,
   IconX,
 } from '@tabler/icons-react'
+import { useConnectWallet, useCurrentAccount, useCurrentWallet, useDisconnectWallet, useWallets } from '@mysten/dapp-kit'
+import { isGoogleWallet } from '@mysten/enoki'
+import { getEnokiConfig } from './app-providers'
 
 const SESSION_KEY = 'cerida.onboarding.session'
-const PENDING_KEY = 'cerida.zklogin.pending'
 
 export type OnboardingSession = {
-  mode: 'zklogin' | 'wallet'
+  mode: 'enoki' | 'wallet' | 'preview'
   label: string
   address: string
   provider: string
   createdAt: number
-  proofStatus: 'preview' | 'pending_prover' | 'ready'
-}
-
-type PendingLogin = {
-  state: string
-  nonce: string
-  createdAt: number
+  proofStatus: 'preview' | 'wallet_standard' | 'ready'
 }
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ')
@@ -80,55 +76,6 @@ function shortAddress(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`
 }
 
-function readPending(): PendingLogin | null {
-  try {
-    const raw = window.sessionStorage.getItem(PENDING_KEY)
-    return raw ? JSON.parse(raw) as PendingLogin : null
-  } catch {
-    return null
-  }
-}
-
-function writePending(pending: PendingLogin) {
-  window.sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending))
-}
-
-function clearPending() {
-  window.sessionStorage.removeItem(PENDING_KEY)
-}
-
-function oauthClientId() {
-  return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim()
-}
-
-function buildGoogleUrl(pending: PendingLogin) {
-  const clientId = oauthClientId()
-  if (!clientId) return null
-
-  const redirectUri = `${window.location.origin}${window.location.pathname}`
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'id_token',
-    scope: 'openid email profile',
-    nonce: pending.nonce,
-    state: pending.state,
-    prompt: 'select_account',
-  })
-
-  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
-}
-
-function parseOAuthHash() {
-  if (typeof window === 'undefined') return null
-  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash
-  if (!hash.includes('id_token=')) return null
-  const params = new URLSearchParams(hash)
-  const idToken = params.get('id_token')
-  const state = params.get('state')
-  return idToken && state ? { idToken, state } : null
-}
-
 function StepPill({ active, done, label }: { active: boolean; done: boolean; label: string }) {
   return (
     <div className="flex items-center gap-2">
@@ -162,23 +109,27 @@ function CapabilityRow({ icon, title, body }: { icon: React.ReactNode; title: st
 }
 
 function ConnectedState({ session, onDisconnect }: { session: OnboardingSession; onDisconnect: () => void }) {
+  const isPreview = session.mode === 'preview'
+
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[1fr_320px] max-[860px]:grid-cols-1">
       <section className="min-w-0 border-r border-border-subtle p-5 max-[860px]:border-b max-[860px]:border-r-0">
         <div className="inline-flex items-center gap-2 rounded-[6px] border border-bullish-green/30 bg-bullish-green/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest text-bullish-green">
           <IconCheck size={13} stroke={2.2} />
-          Signed in
+          {isPreview ? 'Preview session' : 'Enoki connected'}
         </div>
         <h2 className="mt-5 text-[24px] font-bold tracking-[-0.01em] text-text-primary">Cerida account ready</h2>
         <p className="mt-3 max-w-xl text-[12px] leading-6 text-text-tertiary">
-          This local session is ready for profile state, sponsored transactions, and later zkLogin proof signing. The next backend piece is the prover/salt service that converts the OAuth JWT into a Sui zkLogin signature.
+          {isPreview
+            ? 'This local preview keeps the onboarding UI usable while Enoki credentials are missing. Add the Enoki API key and Google OAuth client ID to use the real wallet-standard flow.'
+            : 'This account is connected through Enoki as a Sui wallet-standard account. The next Cerida step is using this signer to create profile, deposit, and copy-trading permission transactions.'}
         </p>
 
         <div className="mt-6 grid gap-px border border-border-subtle bg-border-subtle">
           {[
-            ['Mode', session.mode === 'zklogin' ? 'zkLogin social wallet' : 'External wallet'],
+            ['Mode', session.mode === 'enoki' ? 'Enoki zkLogin wallet' : session.mode === 'wallet' ? 'Sui wallet' : 'Local preview'],
             ['Provider', session.provider],
-            ['Proof status', session.proofStatus === 'pending_prover' ? 'JWT captured, prover pending' : 'Local preview'],
+            ['Proof status', session.proofStatus === 'wallet_standard' ? 'Managed by Enoki wallet' : 'Local preview only'],
           ].map(([label, value]) => (
             <div key={label} className="grid grid-cols-[160px_minmax(0,1fr)] bg-surface-primary px-4 py-3 text-[12px] max-[560px]:grid-cols-1">
               <div className="uppercase tracking-widest text-text-quaternary">{label}</div>
@@ -202,82 +153,90 @@ function ConnectedState({ session, onDisconnect }: { session: OnboardingSession;
           Open portfolio
         </button>
         <button onClick={onDisconnect} className="mt-2 flex h-10 w-full items-center justify-center rounded-[6px] border border-bearish-red/35 text-[12px] font-semibold text-bearish-red hover:bg-bearish-red/10">
-          Disconnect local session
+          Disconnect session
         </button>
       </aside>
     </div>
   )
 }
 
-function StartState({ onSession }: { onSession: (session: OnboardingSession) => void }) {
-  const [busy, setBusy] = useState(false)
+function StartState({ onPreview }: { onPreview: (session: OnboardingSession) => void }) {
+  const wallets = useWallets()
+  const connectWallet = useConnectWallet()
+  const currentAccount = useCurrentAccount()
+  const { isConnecting } = useCurrentWallet()
   const [error, setError] = useState<string | null>(null)
-  const clientId = oauthClientId()
+  const config = getEnokiConfig()
 
-  const startGoogle = () => {
+  const googleWallet = wallets.find((wallet) => isGoogleWallet(wallet))
+  const enokiConfigured = Boolean(config.apiKey && config.googleClientId)
+
+  const connectGoogle = () => {
     setError(null)
-    if (!clientId) {
-      setError('Add VITE_GOOGLE_CLIENT_ID to enable the real Google redirect.')
+    if (!enokiConfigured) {
+      setError('Add VITE_ENOKI_API_KEY and VITE_GOOGLE_CLIENT_ID to enable Enoki Google sign-in.')
       return
     }
-    const pending = {
-      state: randomHex(16),
-      nonce: randomHex(24),
-      createdAt: Date.now(),
+    if (!googleWallet) {
+      setError('Enoki Google wallet is not registered yet. Refresh after adding the env vars.')
+      return
     }
-    writePending(pending)
-    const url = buildGoogleUrl(pending)
-    if (!url) return
-    window.location.assign(url)
+
+    connectWallet.mutate(
+      { wallet: googleWallet },
+      {
+        onError: (err) => setError(err.message),
+      },
+    )
   }
 
   const preview = async () => {
-    setBusy(true)
     setError(null)
-    const address = await digestAddress(`cerida-preview:${Date.now()}:${randomHex(8)}`)
+    const address = await digestAddress(`cerida-enoki-preview:${Date.now()}:${randomHex(8)}`)
     const session: OnboardingSession = {
-      mode: 'zklogin',
+      mode: 'preview',
       label: 'Preview account',
       address,
-      provider: 'Local preview',
+      provider: 'Local Enoki preview',
       createdAt: Date.now(),
       proofStatus: 'preview',
     }
     safeWriteSession(session)
-    onSession(session)
-    setBusy(false)
+    onPreview(session)
   }
+
+  const disabled = isConnecting || connectWallet.isPending
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_330px] max-[900px]:grid-cols-1">
       <section className="min-w-0 border-r border-border-subtle p-5 max-[900px]:border-b max-[900px]:border-r-0">
         <div className="flex flex-wrap gap-4">
-          <StepPill active done={false} label="OAuth" />
-          <StepPill active={false} done={false} label="Proof" />
+          <StepPill active done={false} label="Enoki" />
+          <StepPill active={false} done={false} label="Wallet" />
           <StepPill active={false} done={false} label="Gasless" />
         </div>
 
-        <h2 className="mt-6 text-[25px] font-bold tracking-[-0.01em] text-text-primary">Start with zkLogin</h2>
+        <h2 className="mt-6 text-[25px] font-bold tracking-[-0.01em] text-text-primary">Start with Enoki</h2>
         <p className="mt-3 max-w-xl text-[12px] leading-6 text-text-tertiary">
-          Sign in with Google, create a Sui address, then let Cerida sponsor first actions while your account stays self-custodial. This is the first onboarding slice; prover-backed transaction signing comes next.
+          Enoki gives Cerida a managed zkLogin wallet path: Google sign-in, app-specific Sui address, wallet-standard signing, and a clean route into sponsored transactions.
         </p>
 
         <div className="mt-6 grid gap-3">
           <button
-            onClick={startGoogle}
-            className="flex h-11 items-center justify-between rounded-[6px] border border-brand-violet/45 bg-brand-violet/15 px-4 text-[13px] font-bold text-text-primary hover:bg-brand-violet/20"
+            onClick={connectGoogle}
+            disabled={disabled}
+            className="flex h-11 items-center justify-between rounded-[6px] border border-brand-violet/45 bg-brand-violet/15 px-4 text-[13px] font-bold text-text-primary hover:bg-brand-violet/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="flex items-center gap-3">
               <IconLogin2 size={17} stroke={1.9} />
-              Continue with Google
+              {disabled ? 'Opening Enoki...' : 'Continue with Google'}
             </span>
             <IconExternalLink size={16} stroke={1.8} />
           </button>
 
           <button
             onClick={preview}
-            disabled={busy}
-            className="flex h-10 items-center justify-between rounded-[6px] border border-border-subtle bg-surface-card px-4 text-[12px] font-semibold text-text-secondary hover:text-text-primary disabled:opacity-60"
+            className="flex h-10 items-center justify-between rounded-[6px] border border-border-subtle bg-surface-card px-4 text-[12px] font-semibold text-text-secondary hover:text-text-primary"
           >
             <span className="flex items-center gap-3">
               <IconSparkles size={15} stroke={1.8} />
@@ -285,6 +244,20 @@ function StartState({ onSession }: { onSession: (session: OnboardingSession) => 
             </span>
             <IconArrowRight size={15} stroke={1.8} />
           </button>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden border border-border-subtle bg-border-subtle text-[11px] max-[620px]:grid-cols-1">
+          {[
+            ['Network', config.network],
+            ['Enoki API', config.apiKey ? 'configured' : 'missing'],
+            ['Google OAuth', config.googleClientId ? 'configured' : 'missing'],
+            ['Wallet', currentAccount ? shortAddress(currentAccount.address) : googleWallet ? 'registered' : 'not registered'],
+          ].map(([label, value]) => (
+            <div key={label} className="bg-surface-primary px-3 py-2">
+              <div className="uppercase tracking-widest text-text-quaternary">{label}</div>
+              <div className="mt-1 font-semibold text-text-primary">{value}</div>
+            </div>
+          ))}
         </div>
 
         {error && (
@@ -297,18 +270,18 @@ function StartState({ onSession }: { onSession: (session: OnboardingSession) => 
       <aside className="bg-surface-primary">
         <CapabilityRow
           icon={<IconShieldCheck size={15} stroke={1.9} />}
-          title="Self-custody first"
-          body="OAuth creates the address path, but trade approvals still require scoped signing."
+          title="Managed zkLogin"
+          body="Enoki handles the sharp OAuth, salt, and proof edges instead of us operating custom zkLogin infra."
         />
         <CapabilityRow
           icon={<IconKey size={15} stroke={1.9} />}
           title="Keeper permissions later"
-          body="Copy trading and auto execution should use bounded capability objects."
+          body="Copy trading should still use bounded Move capability objects signed by this account."
         />
         <CapabilityRow
           icon={<IconWallet size={15} stroke={1.9} />}
-          title="Wallet fallback"
-          body="Power users can still connect a normal Sui wallet in the next slice."
+          title="Wallet-standard path"
+          body="Once connected, Cerida can use normal Sui wallet hooks for profile, deposits, and approvals."
         />
       </aside>
     </div>
@@ -317,42 +290,28 @@ function StartState({ onSession }: { onSession: (session: OnboardingSession) => 
 
 function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [mounted, setMounted] = useState(false)
-  const [session, setSession] = useState<OnboardingSession | null>(null)
-  const [callbackError, setCallbackError] = useState<string | null>(null)
+  const [previewSession, setPreviewSession] = useState<OnboardingSession | null>(null)
+  const currentAccount = useCurrentAccount()
+  const { currentWallet, isConnected } = useCurrentWallet()
+  const disconnectWallet = useDisconnectWallet()
 
   useEffect(() => setMounted(true), [])
 
   useEffect(() => {
-    if (!mounted) return
-    setSession(safeReadSession())
-  }, [mounted, open])
+    if (!currentAccount || !isConnected) return
 
-  useEffect(() => {
-    if (!mounted) return
-    const oauth = parseOAuthHash()
-    if (!oauth) return
-
-    const pending = readPending()
-    if (!pending || pending.state !== oauth.state) {
-      setCallbackError('OAuth state mismatch. Start zkLogin again from Cerida.')
-      return
+    const isEnoki = currentWallet ? isGoogleWallet(currentWallet) : false
+    const next: OnboardingSession = {
+      mode: isEnoki ? 'enoki' : 'wallet',
+      label: isEnoki ? 'Enoki account' : currentWallet?.name ?? 'Sui wallet',
+      address: currentAccount.address,
+      provider: isEnoki ? 'Google via Enoki' : currentWallet?.name ?? 'Wallet Standard',
+      createdAt: Date.now(),
+      proofStatus: 'wallet_standard',
     }
-
-    void digestAddress(`cerida-zklogin:${oauth.idToken}`).then((address) => {
-      const next: OnboardingSession = {
-        mode: 'zklogin',
-        label: 'zkLogin account',
-        address,
-        provider: 'Google',
-        createdAt: Date.now(),
-        proofStatus: 'pending_prover',
-      }
-      safeWriteSession(next)
-      setSession(next)
-      clearPending()
-      window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`)
-    })
-  }, [mounted])
+    safeWriteSession(next)
+    setPreviewSession(null)
+  }, [currentAccount, currentWallet, isConnected])
 
   useEffect(() => {
     if (!open) return undefined
@@ -363,11 +322,24 @@ function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onClose, open])
 
+  const connectedSession = currentAccount && isConnected
+    ? safeReadSession() ?? {
+      mode: 'wallet' as const,
+      label: currentWallet?.name ?? 'Sui wallet',
+      address: currentAccount.address,
+      provider: currentWallet?.name ?? 'Wallet Standard',
+      createdAt: Date.now(),
+      proofStatus: 'wallet_standard' as const,
+    }
+    : null
+
+  const session = connectedSession ?? previewSession
   const title = useMemo(() => session ? `${session.label} ${shortAddress(session.address)}` : 'Sign in / Sign up', [session])
 
   const disconnect = () => {
-    clearOnboardingSession()
-    setSession(null)
+    safeWriteSession(null)
+    setPreviewSession(null)
+    if (isConnected) disconnectWallet.mutate()
   }
 
   if (!mounted || !open) return null
@@ -379,20 +351,14 @@ function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void
         <header className="flex h-12 shrink-0 items-center justify-between border-b border-border-subtle bg-surface-primary px-4">
           <div className="min-w-0">
             <div className="truncate text-[15px] font-bold text-text-primary">{title}</div>
-            <div className="text-[11px] text-text-quaternary">zkLogin onboarding, sponsored actions, and wallet fallback.</div>
+            <div className="text-[11px] text-text-quaternary">Enoki zkLogin, sponsored actions, and wallet-standard signing.</div>
           </div>
           <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-[6px] text-text-quaternary hover:bg-surface-card hover:text-text-primary" aria-label="Close onboarding">
             <IconX size={16} stroke={1.8} />
           </button>
         </header>
 
-        {callbackError && (
-          <div className="border-b border-bearish-red/30 bg-bearish-red/10 px-4 py-2 text-[11px] text-bearish-red">
-            {callbackError}
-          </div>
-        )}
-
-        {session ? <ConnectedState session={session} onDisconnect={disconnect} /> : <StartState onSession={setSession} />}
+        {session ? <ConnectedState session={session} onDisconnect={disconnect} /> : <StartState onPreview={setPreviewSession} />}
       </div>
     </div>,
     document.body,
