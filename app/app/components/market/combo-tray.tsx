@@ -33,7 +33,7 @@ interface Props { stake: number; onStakeChange: (v: number) => void }
 export default function ComboTray({ stake, onStakeChange }: Props) {
   const { legs, open, mode, removeLeg, clear, setOpen, setMode } = useCombo()
 
-  if (legs.length === 0) return null
+  if (!open && legs.length === 0) return null
 
   const combo  = mode === 'combo'  ? calcCombo(legs, stake)  : null
   const parlay = mode === 'parlay' ? calcParlay(legs, stake) : null
@@ -48,35 +48,41 @@ export default function ComboTray({ stake, onStakeChange }: Props) {
       className="absolute bottom-0 left-0 right-0 z-40 border-t border-border-default"
       style={{ background: 'var(--color-surface-primary)' }}
     >
-      {/* Collapsed bar — always visible */}
+      {/* Collapsed bar — always visible when tray is open or has legs */}
       <div
         className="flex items-center gap-3 px-4 h-9 cursor-pointer select-none"
         onClick={() => setOpen(!open)}
       >
         <span className="text-[10px] uppercase tracking-widest text-text-quaternary">Combo</span>
-        <div className="flex items-center gap-1.5">
-          {legs.map(l => (
-            <span
-              key={l.id}
-              className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-[5px]"
-              style={{ background: `${DIRECTION_COLOR[l.direction]}18`, color: DIRECTION_COLOR[l.direction], border: `1px solid ${DIRECTION_COLOR[l.direction]}30` }}
-            >
-              {l.label}
-            </span>
-          ))}
-        </div>
-        {legs.length >= 2 && (
-          <span className="text-[11px] font-semibold ml-1" style={{ color: '#807dfe', fontFamily: 'var(--font-mono)' }}>
-            {multi.toFixed(1)}×
-          </span>
+        {legs.length === 0 ? (
+          <span className="text-[10px] text-text-quaternary opacity-50">Add legs from Trade or Range widgets</span>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            {legs.map(l => (
+              <span
+                key={l.id}
+                className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-[5px]"
+                style={{ background: `${DIRECTION_COLOR[l.direction]}18`, color: DIRECTION_COLOR[l.direction], border: `1px solid ${DIRECTION_COLOR[l.direction]}30` }}
+              >
+                {l.label}
+              </span>
+            ))}
+            {legs.length >= 2 && (
+              <span className="text-[11px] font-semibold ml-1" style={{ color: '#807dfe', fontFamily: 'var(--font-mono)' }}>
+                {multi.toFixed(1)}×
+              </span>
+            )}
+          </div>
         )}
-        <button
-          onClick={e => { e.stopPropagation(); clear() }}
-          className="ml-auto text-[10px] text-text-quaternary hover:text-bearish-red transition-colors"
-        >
-          Clear
-        </button>
-        <span className="text-text-quaternary">
+        {legs.length > 0 && (
+          <button
+            onClick={e => { e.stopPropagation(); clear() }}
+            className="ml-auto text-[10px] text-text-quaternary hover:text-bearish-red transition-colors"
+          >
+            Clear
+          </button>
+        )}
+        <span className={`${legs.length > 0 ? '' : 'ml-auto'} text-text-quaternary`}>
           {open ? <IconChevronDown size={13} stroke={2} /> : <IconChevronUp size={13} stroke={2} />}
         </span>
       </div>

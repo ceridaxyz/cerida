@@ -418,7 +418,7 @@ const TradePageInner = () => {
   const [items, setItems] = useState<Item[]>(INITIAL_ITEMS);
   const [layout, setLayout] = useState<Layout>(INITIAL_LAYOUT);
   const [comboStake, setComboStake] = useState(10);
-  const { setOpen: setComboOpen } = useCombo();
+  const { open: comboOpen, setOpen: setComboOpen } = useCombo();
   const { ref, width, rowHeight } = useGridSize();
   const nextId = useRef(0);
   const prevCount = useRef(items.length);
@@ -487,7 +487,8 @@ const TradePageInner = () => {
           <TopNav
             addOptions={ADD_OPTIONS}
             onAddWidget={(t) => addWidget(t as WidgetType)}
-            onComboOpen={() => setComboOpen(true)}
+            onComboOpen={() => setComboOpen(!comboOpen)}
+            comboActive={comboOpen}
           />
         </div>
         <div ref={ref} className="flex-1 overflow-auto">

@@ -14,6 +14,7 @@ interface TopNavProps {
   addOptions?: AddOption[]
   onAddWidget?: (type: string) => void
   onComboOpen?: () => void
+  comboActive?: boolean
 };
 
 const SearchIcon = () => <IconSearch size={15} stroke={2} />;
@@ -59,7 +60,7 @@ const Island = ({
   </div>
 );
 
-const TopNav = ({ addOptions = [], onAddWidget, onComboOpen }: TopNavProps) => {
+const TopNav = ({ addOptions = [], onAddWidget, onComboOpen, comboActive }: TopNavProps) => {
   const [addOpen, setAddOpen] = useState(false)
   const addRef = useRef<HTMLDivElement>(null)
 
@@ -172,12 +173,10 @@ const TopNav = ({ addOptions = [], onAddWidget, onComboOpen }: TopNavProps) => {
           onClick={onComboOpen}
           className="flex items-center gap-1.5 text-[12px] font-semibold rounded-[10px] px-2.5 py-1.5 transition-all"
           style={{
-            background: 'rgba(128,125,254,0.1)',
+            background: comboActive ? 'rgba(128,125,254,0.22)' : 'rgba(128,125,254,0.1)',
             color: '#807dfe',
-            border: '1px solid rgba(128,125,254,0.25)',
+            border: `1px solid rgba(128,125,254,${comboActive ? '0.45' : '0.25'})`,
           }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(128,125,254,0.18)' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(128,125,254,0.1)' }}
         >
           Combo
         </button>
