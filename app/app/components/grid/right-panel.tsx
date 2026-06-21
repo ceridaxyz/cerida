@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { memo, useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { IconCheck, IconPlus } from '@tabler/icons-react';
 import type { GridState } from './use-grid-state';
 
@@ -135,11 +135,20 @@ function PayoffChart({ s }: { s: GridState }) {
 
 // ── Right panel ───────────────────────────────────────────────────────────────
 
-export default function RightPanel({ s }: { s: GridState }) {
+// Wrapped in memo so the 600ms s.now tick doesn't force a re-render here when
+// nothing the right panel cares about has actually changed (legs, focusedLegKey, etc.).
+export default memo(function RightPanel({
+  s,
+  focusedLegKey,
+  setFocusedLegKey,
+}: {
+  s: GridState;
+  focusedLegKey: string | null;
+  setFocusedLegKey: (key: string | null) => void;
+}) {
   // true = require manual confirm before placing; false = auto-place on click
   const [confirmBets, setConfirmBets] = useState(false);
   const [cellAnim, setCellAnim] = useState<Record<string, 'pop' | 'fall'>>({});
-  const [focusedLegKey, setFocusedLegKey] = useState<string | null>(null);
 
   const focusedEpoch =
     s.epochs.find((e) => e.id === s.focusedEpoch) ??
@@ -486,4 +495,4 @@ export default function RightPanel({ s }: { s: GridState }) {
       )}
     </div>
   );
-}
+});
