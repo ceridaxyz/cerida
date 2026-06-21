@@ -6,9 +6,8 @@ import ReactGridLayout, {
 } from 'react-grid-layout/legacy';
 import 'react-grid-layout/css/styles.css';
 import { IconX, IconPlus } from '@tabler/icons-react';
-import Sidebar from '../../components/sidebar';
 import TopNav from '../../components/market/top-nav';
-import { ComboProvider, useCombo } from '../../components/market/combo-context';
+import { ComboProvider, useComboDispatch } from '../../components/market/combo-context';
 import ComboTray from '../../components/market/combo-tray';
 
 export const meta = () => [{ title: 'Trade — Cerida' }];
@@ -54,6 +53,10 @@ const TradingPanel = lazy(
 const RangeTrading = lazy(
   () => import('../../components/trading/range-trading'),
 );
+const ExpiryLadder = lazy(
+  () => import('../../components/trading/expiry-ladder'),
+)
+const PnlSurface = lazy(() => import('../../components/trading/pnl-surface'));
 const PriceChart = lazy(() => import('../../components/market/price-chart'));
 const CryptoPrice = lazy(() => import('../../components/market/crypto-price'));
 const IvTermStructure = lazy(
@@ -109,6 +112,8 @@ type WidgetType =
   | 'iv'
   | 'trade'
   | 'range'
+  | 'ladder'
+  | 'surface'
   | 'positions'
   | 'landscape'
   | 'panel';
@@ -184,6 +189,18 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
       </Suspense>
     ),
   },
+  ladder: {
+    label: 'Expiry Ladder',
+    w: 5,
+    h: 5,
+    minW: 4,
+    minH: 4,
+    render: () => (
+      <Suspense fallback={<TradeSkeleton />}>
+        <ExpiryLadder />
+      </Suspense>
+    ),
+  },
   range: {
     label: 'Range',
     w: 5,
@@ -193,6 +210,18 @@ const CATALOG: Record<WidgetType, WidgetSpec> = {
     render: () => (
       <Suspense fallback={<TradeSkeleton />}>
         <RangeTrading />
+      </Suspense>
+    ),
+  },
+  surface: {
+    label: 'P&L Surface',
+    w: 7,
+    h: 6,
+    minW: 5,
+    minH: 5,
+    render: () => (
+      <Suspense fallback={<TradeSkeleton />}>
+        <PnlSurface />
       </Suspense>
     ),
   },
@@ -424,7 +453,6 @@ const INITIAL_LAYOUT: Layout = [
 const TradePageInner = () => {
   const [items, setItems] = useState<Item[]>(INITIAL_ITEMS);
   const [layout, setLayout] = useState<Layout>(INITIAL_LAYOUT);
-  const { open: comboOpen, setOpen: setComboOpen } = useCombo();
   const { ref, width, rowHeight } = useGridSize();
   const nextId = useRef(0);
   const prevCount = useRef(items.length);
@@ -486,62 +514,59 @@ const TradePageInner = () => {
     );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-page">
-      <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0 relative">
-        <div className="px-2 pt-2 shrink-0 relative z-30">
-          <TopNav
-            addOptions={ADD_OPTIONS}
-            onAddWidget={(t) => addWidget(t as WidgetType)}
-            onComboOpen={() => setComboOpen(!comboOpen)}
-            comboActive={comboOpen}
-          />
-        </div>
-        <div ref={ref} className="flex-1 overflow-auto">
-          <ReactGridLayout
-            layout={layout}
-            onLayoutChange={(l: Layout) => setLayout(l)}
-            cols={COLS}
-            rowHeight={rowHeight}
-            width={width}
-            margin={[GAP, GAP]}
-            containerPadding={[PAD, PAD]}
-            draggableHandle=".widget-handle"
-            draggableCancel="input,button,select,textarea,a"
-            resizeHandles={['s', 'e', 'se', 'w', 'n', 'sw', 'ne', 'nw']}
-            compactType="vertical"
-            preventCollision={false}
-            allowOverlap={false}
-            useCSSTransforms
-          >
-            {items.map((item) => {
-              const activeTab = item.tabs[item.active] ?? item.tabs[0]!;
-              return (
-                <div key={item.id} className="h-full">
-                  <Widget
-                    tabs={item.tabs.map((t) => ({ id: t.id, label: CATALOG[t.type].label }))}
-                    active={item.active}
-                    options={ADD_OPTIONS}
-                    content={<WidgetContent type={activeTab.type} />}
-                    onSelect={(i) => selectTab(item.id, i)}
-                    onAddTab={(t) => addTab(item.id, t as WidgetType)}
-                    onCloseTab={(i) => closeTab(item.id, i)}
-                    onClose={() => removeWidget(item.id)}
-                  />
-                </div>
-              );
-            })}
-          </ReactGridLayout>
-        </div>
-        <ComboTray />
+    <div className="flex-1 flex flex-col min-w-0 relative">
+      <div className="px-2 pt-2 shrink-0 relative z-30">
+        <TopNavWithCombo addOptions={ADD_OPTIONS} onAddWidget={(t) => addWidget(t as WidgetType)} />
+      </div>
+      <div ref={ref} className="flex-1 overflow-auto">
+        <ReactGridLayout
+          layout={layout}
+          onLayoutChange={(l: Layout) => setLayout(l)}
+          cols={COLS}
+          rowHeight={rowHeight}
+          width={width}
+          margin={[GAP, GAP]}
+          containerPadding={[PAD, PAD]}
+          draggableHandle=".widget-handle"
+          draggableCancel="input,button,select,textarea,a"
+          resizeHandles={['s', 'e', 'se', 'w', 'n', 'sw', 'ne', 'nw']}
+          compactType="vertical"
+          preventCollision={false}
+          allowOverlap={false}
+          useCSSTransforms
+        >
+          {items.map((item) => {
+            const activeTab = item.tabs[item.active] ?? item.tabs[0]!;
+            return (
+              <div key={item.id} className="h-full">
+                <Widget
+                  tabs={item.tabs.map((t) => ({ id: t.id, label: CATALOG[t.type].label }))}
+                  active={item.active}
+                  options={ADD_OPTIONS}
+                  content={<WidgetContent type={activeTab.type} />}
+                  onSelect={(i) => selectTab(item.id, i)}
+                  onAddTab={(t) => addTab(item.id, t as WidgetType)}
+                  onCloseTab={(i) => closeTab(item.id, i)}
+                  onClose={() => removeWidget(item.id)}
+                />
+              </div>
+            );
+          })}
+        </ReactGridLayout>
       </div>
     </div>
   );
 };
 
+function TopNavWithCombo({ addOptions, onAddWidget }: { addOptions: { type: string; label: string }[]; onAddWidget: (t: string) => void }) {
+  const { setOpen } = useComboDispatch();
+  return <TopNav addOptions={addOptions} onAddWidget={onAddWidget} onComboOpen={() => setOpen(true)} />;
+}
+
 const TradePage = () => (
   <ComboProvider>
     <TradePageInner />
+    <ComboTray />
   </ComboProvider>
 );
 

@@ -1,27 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/dapp-kit'
-import { registerEnokiWallets } from '@mysten/enoki'
-import { getJsonRpcFullnodeUrl, SuiJsonRpcClient } from '@mysten/sui/jsonRpc'
+import { useState } from 'react'
+import { createNetworkConfig, SuiClientProvider, WalletProvider, type Theme } from '@mysten/dapp-kit'
+import { getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-
-type EnokiNetwork = 'mainnet' | 'testnet' | 'devnet'
-
-const enokiNetworks = new Set(['mainnet', 'testnet', 'devnet'])
-
-function configuredNetwork(): EnokiNetwork {
-  const value = (import.meta.env.VITE_ENOKI_NETWORK ?? import.meta.env.VITE_SUI_NETWORK ?? 'testnet') as string
-  return enokiNetworks.has(value) ? value as EnokiNetwork : 'testnet'
-}
-
-export function getEnokiConfig() {
-  return {
-    apiKey: (import.meta.env.VITE_ENOKI_API_KEY as string | undefined)?.trim() ?? '',
-    googleClientId: (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() ?? '',
-    network: configuredNetwork(),
-  }
-}
-
-const enokiNetwork = configuredNetwork()
+import { ToastProvider } from './toast/toast-context'
+import { ToastContainer } from './toast/toast-container'
 
 const { networkConfig } = createNetworkConfig({
   devnet: { url: getJsonRpcFullnodeUrl('devnet') },
@@ -30,44 +12,75 @@ const { networkConfig } = createNetworkConfig({
   localnet: { url: 'http://127.0.0.1:9000' },
 })
 
-function EnokiWalletRegistration() {
-  useEffect(() => {
-    const config = getEnokiConfig()
-    if (!config.apiKey || !config.googleClientId) return undefined
-
-    const client = new SuiJsonRpcClient({
-      network: config.network,
-      url: getJsonRpcFullnodeUrl(config.network),
-    })
-
-    const { unregister } = registerEnokiWallets({
-      apiKey: config.apiKey,
-      client,
-      network: config.network,
-      providers: {
-        google: {
-          clientId: config.googleClientId,
-          redirectUrl: window.location.origin,
-        },
-      },
-    })
-
-    return unregister
-  }, [])
-
-  return null
+const customDarkTheme: Theme = {
+  blurs: {
+    modalOverlay: 'blur(8px)',
+  },
+  backgroundColors: {
+    primaryButton: '#ffffff',
+    primaryButtonHover: 'rgba(255, 255, 255, 0.9)',
+    outlineButtonHover: 'rgba(255, 255, 255, 0.05)',
+    walletItemHover: 'rgba(255, 255, 255, 0.05)',
+    walletItemSelected: 'rgba(255, 255, 255, 0.1)',
+    modalOverlay: 'rgba(0, 0, 0, 0.75)',
+    modalPrimary: '#161616',
+    modalSecondary: '#1c1c1c',
+    iconButton: 'transparent',
+    iconButtonHover: 'rgba(255, 255, 255, 0.08)',
+    dropdownMenu: '#1c1c1c',
+    dropdownMenuSeparator: '#2d2d2d',
+  },
+  borderColors: {
+    outlineButton: '#2d2d2d',
+  },
+  colors: {
+    primaryButton: '#000000',
+    outlineButton: '#ffffff',
+    body: '#ffffff',
+    bodyMuted: 'rgba(255, 255, 255, 0.6)',
+    bodyDanger: '#ff4d4d',
+    iconButton: '#ffffff',
+  },
+  radii: {
+    small: '6px',
+    medium: '10px',
+    large: '14px',
+    xlarge: '18px',
+  },
+  shadows: {
+    primaryButton: 'none',
+    walletItemSelected: 'none',
+  },
+  fontWeights: {
+    normal: '400',
+    medium: '600',
+    bold: '900',
+  },
+  fontSizes: {
+    small: '11px',
+    medium: '13px',
+    large: '16px',
+    xlarge: '20px',
+  },
+  typography: {
+    fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+    fontStyle: 'normal',
+    lineHeight: '1.5',
+    letterSpacing: 'normal',
+  },
 }
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient())
-  const preferredWallets = useMemo(() => ['Sign in with Google'], [])
 
   return (
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networkConfig} defaultNetwork={enokiNetwork}>
-        <EnokiWalletRegistration />
-        <WalletProvider autoConnect preferredWallets={preferredWallets} theme={null}>
-          {children}
+      <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
+        <WalletProvider autoConnect theme={customDarkTheme}>
+          <ToastProvider>
+            {children}
+            <ToastContainer />
+          </ToastProvider>
         </WalletProvider>
       </SuiClientProvider>
     </QueryClientProvider>

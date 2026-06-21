@@ -29,19 +29,15 @@ export default function BandPanel({ s }: { s: GridState }) {
   return (
     <div className="flex flex-col h-full text-[11px]">
       <style>{`
-        @keyframes multFlash{from{color:#19e6bd;text-shadow:0 0 6px rgba(25,230,189,0.6)}to{color:var(--color-bullish-green);text-shadow:none}}
-        @keyframes cellPop{
-          0%  {transform:translateY(0) scale(1);box-shadow:none}
-          22% {transform:translateY(-6px) scale(1.04);box-shadow:0 8px 28px rgba(128,125,254,0.55),inset 0 0 0 1px rgba(128,125,254,0.6)}
-          55% {transform:translateY(-2px) scale(1.015);box-shadow:0 4px 12px rgba(128,125,254,0.25)}
-          78% {transform:translateY(-0.5px) scale(1.005)}
-          100%{transform:translateY(0) scale(1);box-shadow:none}
+        @keyframes cellPop {
+          0%   { transform: scale(1); }
+          35%  { transform: scale(1.02); }
+          100% { transform: scale(1); }
         }
-        @keyframes cellFall{
-          0%  {transform:translateY(0) scale(1) rotate(0deg);opacity:1}
-          28% {transform:translateY(14px) scale(0.96) rotate(1.2deg);opacity:0.55}
-          65% {transform:translateY(5px) scale(0.99) rotate(-0.4deg);opacity:0.85}
-          100%{transform:translateY(0) scale(1) rotate(0deg);opacity:1}
+        @keyframes cellFall {
+          0%   { opacity: 1; }
+          40%  { opacity: 0.5; }
+          100% { opacity: 1; }
         }
       `}</style>
       <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle shrink-0">

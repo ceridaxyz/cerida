@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import {
   IconArrowsSort,
   IconChevronDown,
@@ -10,8 +10,11 @@ import {
   IconSearch,
   IconSettings,
   IconUserCheck,
+  IconWallet,
 } from '@tabler/icons-react'
-import Sidebar from '../../components/sidebar'
+import { useCurrentAccount, useCurrentWallet } from '@mysten/dapp-kit'
+import OnboardingModal from '../../components/onboarding-modal'
+import { toast } from '../../components/toast/toast-context'
 
 export const meta = () => [{ title: 'Portfolio - Cerida' }]
 
@@ -20,12 +23,6 @@ type TimeView = 'calendar' | 'chart'
 type PnlMode = 'pnl' | 'volume'
 type PositionStatus = 'all' | 'open' | 'settled'
 type Category = 'all' | 'binary' | 'range' | 'leverage'
-
-const account = {
-  name: 'tofunnmi',
-  address: '0x8b55...c9',
-  fullAddress: '0x8b55522178a6fd0372b07071e52a835f41c5c4e224a54ce94738f9d0a07fb8c9',
-}
 
 const stats = [
   { label: 'Portfolio', value: '$12,480.42', sub: '+2.84%' },
@@ -188,6 +185,10 @@ function PortfolioPage() {
   const [copyEnabled, setCopyEnabled] = useState(true)
   const [riskLimit, setRiskLimit] = useState('12')
 
+  const account = useCurrentAccount()
+  const { currentWallet, isConnected } = useCurrentWallet()
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+
   const filteredPositions = useMemo(() => {
     return positions.filter((position) => {
       if (!showHistory && position.status === 'settled') return false
@@ -198,12 +199,36 @@ function PortfolioPage() {
     })
   }, [category, search, showHistory, status])
 
-  return (
-    <div className="flex h-screen overflow-hidden bg-page">
-      <Sidebar />
+  if (!isConnected || !account) {
+    return (
+      <main className="flex-1 flex flex-col items-center justify-center bg-page p-6 text-center">
+        <div className="max-w-md border border-border-subtle bg-surface-primary rounded-card p-8 flex flex-col items-center shadow-xl">
+          <div className="w-16 h-16 rounded-full bg-brand-violet/10 flex items-center justify-center mb-6 text-brand-violet">
+            <IconWallet size={32} stroke={1.5} />
+          </div>
+          
+          <h2 className="text-[20px] font-bold text-text-primary tracking-tight">Connect your wallet</h2>
+          <p className="mt-2.5 text-[12px] text-text-tertiary leading-5 max-w-sm">
+            Please connect your Sui wallet to view your portfolio, tracking performance, copy trading, and positions.
+          </p>
 
-      <main className="flex-1 overflow-auto min-w-0">
-        <div className="mx-auto max-w-[1840px] px-5 py-5">
+          <button
+            onClick={() => setOnboardingOpen(true)}
+            className="mt-6 flex h-10 px-6 items-center justify-center gap-2 rounded-button text-[13px] font-semibold text-white bg-brand-violet hover:opacity-90 transition-opacity cursor-pointer animate-pulse w-full"
+          >
+            <IconWallet size={15} stroke={1.8} />
+            Connect Wallet
+          </button>
+        </div>
+
+        <OnboardingModal open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
+      </main>
+    )
+  }
+
+  return (
+    <main className="flex-1 overflow-auto min-w-0">
+      <div className="mx-auto max-w-[1840px] px-5 py-5">
           <div className="mb-5 flex items-center justify-between gap-4">
             <div>
               <h1 className="text-[22px] font-bold text-text-primary">Portfolio</h1>
@@ -221,16 +246,77 @@ function PortfolioPage() {
             </div>
           </div>
 
+          {/* Toast Testing Console */}
+          <div className="mb-6 p-4 border border-border-subtle bg-surface-primary rounded-card">
+            <h3 className="text-[12px] font-bold text-text-primary uppercase tracking-wider mb-3">Toast Testing Console</h3>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => toast.success("Action completed successfully", "Your recent changes have been synchronized with the cloud. You can now view the updated history in your activity log.", {
+                  action: { label: "VIEW", onClick: () => alert("View clicked!") }
+                })}
+                className="h-8 px-3 rounded-[6px] border border-bullish-green/30 bg-bullish-green/5 text-[11px] font-bold text-[#00e676] hover:bg-bullish-green/10 transition-colors uppercase tracking-wider cursor-pointer"
+              >
+                Trigger Success
+              </button>
+              <button
+                onClick={() => toast.info("New update available", "A newer version of this dataset has been detected on the server. Please refresh the page to sync with the latest version.", {
+                  action: { label: "REFRESH", onClick: () => alert("Refresh clicked!") }
+                })}
+                className="h-8 px-3 rounded-[6px] border border-[#2196f3]/30 bg-[#2196f3]/5 text-[11px] font-bold text-[#2196f3] hover:bg-[#2196f3]/10 transition-colors uppercase tracking-wider cursor-pointer"
+              >
+                Trigger Info
+              </button>
+              <button
+                onClick={() => toast.warning("Connection is unstable", "We are having trouble reaching the primary database. Any unsaved progress may be lost if you close this browser tab.", {
+                  action: { label: "RETRY", onClick: () => alert("Retry clicked!") }
+                })}
+                className="h-8 px-3 rounded-[6px] border border-[#ff9800]/30 bg-[#ff9800]/5 text-[11px] font-bold text-[#ff9800] hover:bg-[#ff9800]/10 transition-colors uppercase tracking-wider cursor-pointer"
+              >
+                Trigger Warning
+              </button>
+              <button
+                onClick={() => toast.error("Unable to save changes", "An unexpected error occurred during the data transfer. Please check your network and try performing the action again.", {
+                  action: { label: "REPORT", onClick: () => alert("Report clicked!") }
+                })}
+                className="h-8 px-3 rounded-[6px] border border-[#ff5252]/30 bg-[#ff5252]/5 text-[11px] font-bold text-[#ff5252] hover:bg-[#ff5252]/10 transition-colors uppercase tracking-wider cursor-pointer"
+              >
+                Trigger Error
+              </button>
+              <button
+                onClick={() => {
+                  let progress = 0;
+                  const id = toast.progress("Generating technical data", progress, undefined, {
+                    action: { label: "CANCEL", onClick: () => { clearInterval(interval); alert("Cancelled!"); } }
+                  });
+                  const interval = setInterval(() => {
+                    progress += 10;
+                    if (progress > 100) {
+                      clearInterval(interval);
+                      toast.update(id, { type: 'success', title: 'Data generated successfully', duration: 4000, progress: undefined, action: undefined });
+                    } else {
+                      toast.update(id, { progress });
+                    }
+                  }, 600);
+                }}
+                className="h-8 px-3 rounded-[6px] border border-[#ffca28]/30 bg-[#ffca28]/5 text-[11px] font-bold text-[#ffca28] hover:bg-[#ffca28]/10 transition-colors uppercase tracking-wider cursor-pointer"
+              >
+                Trigger Progress
+              </button>
+            </div>
+          </div>
+
           <section className="border border-border-subtle bg-surface-primary">
             <div className="grid grid-cols-[150px_repeat(6,minmax(120px,1fr))_160px] max-[1180px]:grid-cols-2">
               <div className="flex min-h-[74px] items-center gap-2 border-b border-r border-border-subtle px-4 max-[1180px]:col-span-2">
                 <div>
-                  <div className="text-[14px] font-bold text-text-primary">{account.name}</div>
+                  <div className="text-[14px] font-bold text-text-primary">
+                    {currentWallet?.name ?? 'Connected'}
+                  </div>
                   <button
-                    onClick={() => copyText(account.fullAddress)}
+                    onClick={() => copyText(account.address)}
                     className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-widest text-text-quaternary hover:text-text-secondary"
                   >
-                    {account.address}
+                    {`${account.address.slice(0, 6)}...${account.address.slice(-4)}`}
                     <IconCopy size={12} stroke={1.8} />
                   </button>
                 </div>
@@ -519,8 +605,8 @@ function PortfolioPage() {
           </section>
         </div>
       </main>
-    </div>
-  )
+      <OnboardingModal open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
+    )
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {

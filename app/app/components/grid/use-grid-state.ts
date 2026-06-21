@@ -92,12 +92,11 @@ export interface GridState {
   toggleLeg: (epoch: Epoch, band: Band) => void;
   addLeg: (epoch: Epoch, band: Band) => void;
   removeLeg: (key: string) => void;
+  updateLegCost: (key: string, cost: number) => void;
   clearLegs: () => void;
   legsArr: Leg[];
   payoffPoints: PayoffPoint[];
   stats: Stats;
-  // Manual stake ($ paid per band/leg). Win → stake × multiplier. Flows into
-  // cells, payoff, analytics and the order summary so pricing is consistent.
   stake: number;
   setStake: (v: number) => void;
 }
@@ -186,7 +185,6 @@ export function useGridState(): GridState {
         const sigma = sigmaForHorizon(epochsAhead);
         const prob = bandProb(band.lower, band.upper, price, sigma);
         const multiplier = (1 - EDGE) / prob;
-        const cost = Math.round((UNIT_PAYOUT / multiplier) * 100) / 100;
         const next = new Map(prev);
         next.set(key, {
           key,
@@ -195,7 +193,7 @@ export function useGridState(): GridState {
           lower: band.lower,
           upper: band.upper,
           qty: 1,
-          cost,
+          cost: stakeRef.current,
           multiplier,
         });
         return next;
@@ -223,6 +221,16 @@ export function useGridState(): GridState {
   );
 
   const clearLegs = useCallback(() => setLegs(new Map()), []);
+
+  const updateLegCost = useCallback((key: string, cost: number) => {
+    setLegs((prev) => {
+      const leg = prev.get(key);
+      if (!leg) return prev;
+      const next = new Map(prev);
+      next.set(key, { ...leg, cost: Math.max(0, cost) });
+      return next;
+    });
+  }, []);
 
   // ── Cell derivation ─────────────────────────────────────────────────────────
   // Keep a live price ref so cellFor reflects the latest tick without
@@ -264,14 +272,14 @@ export function useGridState(): GridState {
         const winner = settle >= band.lower && settle < band.upper;
         if (winner && leg) {
           state = 'claimable';
-          uPnl = stakeRef.current * (leg.multiplier - 1);
+          uPnl = leg.cost * (leg.multiplier - 1);
         } else {
           state = winner ? 'won' : 'lost';
         }
       } else if (leg) {
         if (started) {
           state = 'active';
-          uPnl = inBand ? stakeRef.current * (leg.multiplier - 1) : -stakeRef.current;
+          uPnl = inBand ? leg.cost * (leg.multiplier - 1) : -leg.cost;
         } else {
           state = 'selected';
         }
@@ -303,9 +311,7 @@ export function useGridState(): GridState {
     [],
   );
 
-  // Cost per leg is the manual stake (not the auto unit cost), so changing the
-  // stake reprices every leg consistently across payoff / stats / analytics.
-  const legsArr = useMemo(() => [...legs.values()].map((l) => ({ ...l, cost: stake })), [legs, stake]);
+  const legsArr = useMemo(() => [...legs.values()], [legs]);
   const payoffPoints = useMemo(() => computePayoff(legsArr), [legsArr]);
   const stats = useMemo(() => deriveStats(legsArr), [legsArr]);
 
@@ -327,6 +333,7 @@ export function useGridState(): GridState {
     toggleLeg,
     addLeg,
     removeLeg,
+    updateLegCost,
     clearLegs,
     legsArr,
     payoffPoints,

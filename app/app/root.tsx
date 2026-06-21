@@ -2,6 +2,7 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 import type { ReactNode } from 'react'
 import type { Route } from './+types/root'
 import { AppProviders } from './components/app-providers'
+import '@mysten/dapp-kit/dist/index.css'
 import './app.css'
 
 export const Layout = ({ children }: { children: ReactNode }) => (

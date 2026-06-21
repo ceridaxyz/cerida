@@ -46,12 +46,10 @@ const cellColors = {
   expired: { bg: 'rgba(255,255,255,0.02)', border: 'rgba(255,255,255,0.04)', opacity: 0.5 },
 } as const;
 
-// Heat-map fill for tradeable cells: brighter/warmer near the money, fading to
-// near-black in the tails. Driven by the cell's win probability.
+// Heat-map fill for tradeable cells: brighter/warmer near the money.
 function heatFill(prob: number): { bg: string; border: string } {
-  const t = Math.min(1, prob / 0.45); // 0 (tail) → 1 (ATM)
+  const t = Math.min(1, prob / 0.45);
   const a = 0.03 + t * 0.4;
-  // Hue shifts cool-violet (tails) → warm-amber (hot) as probability rises.
   const r = Math.round(128 + t * 100);
   const g = Math.round(125 + t * 40);
   const b = Math.round(254 - t * 160);
@@ -61,8 +59,6 @@ function heatFill(prob: number): { bg: string; border: string } {
   };
 }
 
-// Edge-mode fill: green for +EV cells (your model beats the price), red for
-// house-favored cells. Intensity scales with |EV|.
 function edgeFill(ev: number): { bg: string; border: string } {
   const t = Math.min(1, Math.abs(ev) / 3);
   const a = 0.05 + t * 0.45;
@@ -78,6 +74,7 @@ interface Hover {
   cost: number;
   mx: number;
   my: number;
+  locked: boolean;
 }
 
 type ChartStyle = 'line' | 'candles' | 'heikin' | 'area';
@@ -87,8 +84,9 @@ export default function GridChart({ s }: { s: GridState }) {
   const [hover, setHover] = useState<Hover | null>(null);
   const [chartStyle, setChartStyle] = useState<ChartStyle>('line');
   const [cellMode, setCellMode] = useState<'mult' | 'edge'>('mult');
-  const [showIso, setShowIso] = useState(false);
   const isCandle = chartStyle === 'candles' || chartStyle === 'heikin';
+
+  const [showIso, _setShowIso] = useState(false);
 
   // Zoom & Pan states
   const [visBands, setVisBands] = useState<number>(14);
@@ -99,6 +97,9 @@ export default function GridChart({ s }: { s: GridState }) {
   // Drag-select state.
   const dragging = useRef(false);
   const dragMode = useRef<'add' | 'remove'>('add');
+
+  // Frozen positions for animating cells so time-drift doesn't jitter them.
+  const animFrozenPos = useRef<Map<string, { left: number; top: number; width: number; height: number }>>(new Map());
 
   useEffect(() => {
     const up = () => (dragging.current = false);
@@ -118,28 +119,53 @@ export default function GridChart({ s }: { s: GridState }) {
     >
   >(new Map());
 
+  // Winning-band eruption — fires once per epoch, independent of user bets.
+  const eruptingBandsRef = useRef<Set<string>>(new Set());
+  const [eruptingWinKeys, setEruptingWinKeys] = useState<Set<string>>(new Set());
+
   const isFirstRender = useRef(true);
 
   useEffect(() => {
     const now = s.now;
     if (isFirstRender.current) {
       isFirstRender.current = false;
-      // Mark all currently past cells as animated on mount
       for (const epoch of s.epochs) {
         if (epoch.end <= now) {
           for (const band of s.bands) {
-            const key = `${epoch.id}:${band.idx}`;
-            animatedCellsRef.current.add(key);
+            animatedCellsRef.current.add(`${epoch.id}:${band.idx}`);
           }
+          // Mark already-settled epochs so they don't re-erupt on mount.
+          eruptingBandsRef.current.add(`epoch:${epoch.id}`);
         }
       }
       return;
     }
 
     for (const epoch of s.epochs) {
-      const isPast = epoch.end <= now;
-      if (!isPast) continue;
+      if (epoch.end > now) continue;
 
+      // Winning band eruption — once per epoch, for all viewers.
+      const epochKey = `epoch:${epoch.id}`;
+      if (!eruptingBandsRef.current.has(epochKey)) {
+        const settle = s.settleOf(epoch);
+        if (settle !== null) {
+          const winBand = s.bands.find((b) => settle >= b.lower && settle < b.upper);
+          if (winBand) {
+            eruptingBandsRef.current.add(epochKey);
+            const winKey = `${epoch.id}:${winBand.idx}`;
+            setEruptingWinKeys((prev) => new Set([...prev, winKey]));
+            setTimeout(() => {
+              setEruptingWinKeys((prev) => {
+                const n = new Set(prev);
+                n.delete(winKey);
+                return n;
+              });
+            }, 2000);
+          }
+        }
+      }
+
+      // Per-leg fall-out animation for cells the user bet on.
       for (const band of s.bands) {
         const key = `${epoch.id}:${band.idx}`;
         const leg = s.legs.get(key);
@@ -352,6 +378,40 @@ export default function GridChart({ s }: { s: GridState }) {
   return (
     <div className="flex flex-col h-full w-full">
       <style>{`
+        @keyframes gridWinErupt {
+          0% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(11,153,129,0);
+            background: rgba(11,153,129,0.16);
+            border-color: #0b9981;
+          }
+          10% {
+            transform: scale(1.06);
+            box-shadow: 0 0 0 6px rgba(11,153,129,0.5), 0 0 50px 12px rgba(11,153,129,0.55), inset 0 0 20px rgba(25,230,189,0.3);
+            background: rgba(25,230,189,0.85);
+            border-color: #19e6bd;
+          }
+          28% {
+            transform: scale(1.03);
+            box-shadow: 0 0 0 3px rgba(11,153,129,0.3), 0 0 28px 6px rgba(11,153,129,0.35);
+            background: rgba(11,153,129,0.75);
+          }
+          65% {
+            transform: scale(1.01);
+            box-shadow: 0 0 0 1px rgba(11,153,129,0.15), 0 0 12px 2px rgba(11,153,129,0.2);
+            background: rgba(11,153,129,0.6);
+          }
+          100% {
+            transform: scale(1);
+            box-shadow: 0 0 6px 1px rgba(11,153,129,0.12);
+            background: rgba(11,153,129,0.5);
+            border-color: #0b9981;
+          }
+        }
+        .animate-win-erupt {
+          animation: gridWinErupt 1.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          z-index: 30;
+        }
         @keyframes gridFallOut {
           0% {
             transform: translate3d(0,0,0) rotate(0deg) scale(1);
@@ -369,15 +429,9 @@ export default function GridChart({ s }: { s: GridState }) {
           }
         }
         @keyframes gridSettleShadow {
-          0% {
-            box-shadow: 0 0 0 rgba(0,0,0,0);
-          }
-          35% {
-            box-shadow: 0 10px 22px rgba(0,0,0,0.35);
-          }
-          100% {
-            box-shadow: 0 16px 28px rgba(0,0,0,0);
-          }
+          0% { box-shadow: 0 0 0 rgba(0,0,0,0); }
+          35% { box-shadow: 0 10px 22px rgba(0,0,0,0.35); }
+          100% { box-shadow: 0 16px 28px rgba(0,0,0,0); }
         }
         .animate-fall-out {
           animation:
@@ -386,139 +440,59 @@ export default function GridChart({ s }: { s: GridState }) {
           transform-origin: 50% 50%;
         }
       `}</style>
-      {/* Toolbar — all overlays/toggles live here, off the grid */}
-      <div className="flex items-center gap-1.5 px-2 h-8 shrink-0 border-b border-border-subtle overflow-x-auto">
-        <span
-          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider shrink-0"
-          style={{ background: 'rgba(128,125,254,0.15)', color: '#a6a3ff', fontFamily: 'var(--font-mono)' }}
-        >
-          IV {ivPct.toFixed(0)}%
-        </span>
-        <span
-          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider shrink-0"
-          style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}
-        >
-          RV {rvPct.toFixed(0)}%
-        </span>
-        {rich !== 'FAIR' && (
-          <span
-            className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-wider shrink-0"
-            style={{
-              background: rich === 'RICH' ? 'rgba(242,53,70,0.16)' : 'rgba(25,230,189,0.16)',
-              color: rich === 'RICH' ? '#f23546' : '#19e6bd',
-              fontFamily: 'var(--font-mono)',
-            }}
-            title={`IV/RV ${ivRv.toFixed(2)}× — options ${rich === 'RICH' ? 'expensive vs realized' : 'cheap vs realized'}`}
-          >
-            {rich} {ivRv.toFixed(2)}×
-          </span>
-        )}
-        <span
-          className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-medium tracking-wider text-text-quaternary shrink-0"
-          style={{ background: 'rgba(255,255,255,0.04)', fontFamily: 'var(--font-mono)' }}
-        >
-          ±${horizonSig.toFixed(1)} / epoch
-        </span>
-
-        {/* mult / edge */}
-        <div className="flex items-center gap-0.5 rounded-[5px] p-0.5 ml-1 shrink-0" style={{ background: 'rgba(255,255,255,0.04)' }}>
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 px-3 h-9 shrink-0 border-b border-border-subtle">
+        {/* Cell display mode */}
+        <div className="flex items-center rounded-[5px] p-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
           {(['mult', 'edge'] as const).map((m) => (
             <button
               key={m}
               onClick={() => setCellMode(m)}
-              className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider transition-colors"
+              className="px-2 py-0.5 rounded-[4px] text-[10px] font-medium transition-colors"
               style={{
                 background: cellMode === m ? 'rgba(128,125,254,0.2)' : 'transparent',
                 color: cellMode === m ? '#a6a3ff' : 'var(--color-text-quaternary)',
               }}
             >
-              {m === 'mult' ? 'Mult' : 'Edge'}
+              {m === 'mult' ? 'Payoff' : 'Edge'}
             </button>
           ))}
         </div>
 
-        <button
-          onClick={() => setShowIso((v) => !v)}
-          className="px-1.5 py-1 rounded-[5px] text-[9px] font-semibold uppercase tracking-wider transition-colors shrink-0"
-          style={{
-            background: showIso ? 'rgba(128,125,254,0.2)' : 'rgba(255,255,255,0.04)',
-            color: showIso ? '#a6a3ff' : 'var(--color-text-quaternary)',
-          }}
-        >
-          Corridor
-        </button>
-
-        {/* Zoom & Pan Controls */}
-        <div className="flex items-center gap-1 border-l border-border-subtle pl-2 shrink-0">
-          <span className="text-[8px] text-text-quaternary uppercase tracking-wider select-none font-bold">Zoom</span>
-          <button
-            onClick={() => setVisBands((b) => Math.max(6, b - 1))}
-            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[10px] font-bold"
-            title="Zoom In (Price)"
-          >
-            +
-          </button>
-          <button
-            onClick={() => setVisBands((b) => Math.min(22, b + 1))}
-            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[10px] font-bold"
-            title="Zoom Out (Price)"
-          >
-            -
-          </button>
-
-          <span className="text-[8px] text-text-quaternary uppercase tracking-wider select-none font-bold ml-1">Pan</span>
-          <button
-            onClick={() => setYOffset((y) => y + 1)}
-            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
-            title="Pan Up"
-          >
-            ▲
-          </button>
-          <button
-            onClick={() => setYOffset((y) => y - 1)}
-            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
-            title="Pan Down"
-          >
-            ▼
-          </button>
-          <button
-            onClick={() => setXOffset((x) => x - 15 * 1000)}
-            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
-            title="Pan Left"
-          >
-            ◀
-          </button>
-          <button
-            onClick={() => setXOffset((x) => x + 15 * 1000)}
-            className="flex items-center justify-center w-5 h-5 rounded-[4px] bg-surface-card hover:bg-surface-hover border border-border-subtle text-text-tertiary hover:text-text-primary text-[8px]"
-            title="Pan Right"
-          >
-            ▶
-          </button>
-
-          {(yOffset !== 0 || xOffset !== 0 || visBands !== 14 || winFuture !== 6 * EPOCH_MS) && (
-            <button
-              onClick={() => {
-                setYOffset(0);
-                setXOffset(0);
-                setVisBands(14);
-                setWinFuture(6 * EPOCH_MS);
-              }}
-              className="px-1 py-0.5 rounded-[4px] bg-bearish-red/10 border border-bearish-red/20 text-bearish-red text-[8px] font-bold uppercase tracking-wider hover:bg-bearish-red/20 transition-colors"
-              title="Reset Zoom & Pan"
-            >
-              Reset
-            </button>
-          )}
+        {/* Zoom */}
+        <div className="flex items-center gap-0.5 rounded-[5px] p-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+          <button onClick={() => setVisBands((b) => Math.max(6, b - 1))} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[11px] font-bold" title="Zoom in">+</button>
+          <button onClick={() => setVisBands((b) => Math.min(22, b + 1))} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[11px] font-bold" title="Zoom out">−</button>
+          <button onClick={() => setYOffset((y) => y + 1)} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[9px]" title="Pan up">▲</button>
+          <button onClick={() => setYOffset((y) => y - 1)} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[9px]" title="Pan down">▼</button>
+          <button onClick={() => setXOffset((x) => x - 15_000)} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[9px]" title="Pan left">◀</button>
+          <button onClick={() => setXOffset((x) => x + 15_000)} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[9px]" title="Pan right">▶</button>
         </div>
 
-        {/* chart style — pushed to the right */}
-        <div className="flex items-center gap-0.5 rounded-[5px] p-0.5 ml-auto shrink-0" style={{ background: 'rgba(255,255,255,0.04)' }}>
+        {(yOffset !== 0 || xOffset !== 0 || visBands !== 14 || winFuture !== 6 * EPOCH_MS) && (
+          <button
+            onClick={() => { setYOffset(0); setXOffset(0); setVisBands(14); setWinFuture(6 * EPOCH_MS); }}
+            className="text-[10px] text-text-quaternary hover:text-text-tertiary transition-colors"
+          >
+            Reset
+          </button>
+        )}
+
+        {/* IV chip — informational only */}
+        <span className="text-[10px] text-text-quaternary ml-1" style={{ fontFamily: 'var(--font-mono)' }}>
+          IV {ivPct.toFixed(0)}%
+          {rich !== 'FAIR' && (
+            <span style={{ color: rich === 'RICH' ? '#f23546' : '#19e6bd' }}> · {rich}</span>
+          )}
+        </span>
+
+        {/* chart style */}
+        <div className="flex items-center rounded-[5px] p-0.5 ml-auto" style={{ background: 'rgba(255,255,255,0.04)' }}>
           {(['line', 'candles', 'heikin', 'area'] as const).map((style) => (
             <button
               key={style}
               onClick={() => setChartStyle(style)}
-              className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-semibold uppercase tracking-wider transition-colors"
+              className="px-2 py-0.5 rounded-[4px] text-[10px] font-medium transition-colors"
               style={{
                 background: chartStyle === style ? 'rgba(128,125,254,0.2)' : 'transparent',
                 color: chartStyle === style ? '#a6a3ff' : 'var(--color-text-quaternary)',
@@ -559,22 +533,10 @@ export default function GridChart({ s }: { s: GridState }) {
 
         {/* Expected-move cone (±1σ) */}
         <path d={conePath} fill="rgba(128,125,254,0.07)" stroke="none" />
-        <polyline
-          points={coneUpper.join(' ')}
-          fill="none"
-          stroke="rgba(128,125,254,0.3)"
-          strokeWidth={1}
-          strokeDasharray="2 3"
-        />
-        <polyline
-          points={coneLower.join(' ')}
-          fill="none"
-          stroke="rgba(128,125,254,0.3)"
-          strokeWidth={1}
-          strokeDasharray="2 3"
-        />
+        <polyline points={coneUpper.join(' ')} fill="none" stroke="rgba(128,125,254,0.3)" strokeWidth={1} strokeDasharray="2 3" />
+        <polyline points={coneLower.join(' ')} fill="none" stroke="rgba(128,125,254,0.3)" strokeWidth={1} strokeDasharray="2 3" />
 
-        {/* Probability isolines — expected-range corridor */}
+        {/* Probability isolines */}
         {showIso &&
           isoLevels.flatMap((k) =>
             ([1, -1] as const).map((side) => (
@@ -597,10 +559,10 @@ export default function GridChart({ s }: { s: GridState }) {
         const isPast = epoch.end <= s.now;
         return visibleBands.map((band) => {
           const cell = s.cellFor(epoch, band);
-          const left = xOf(epoch.start);
-          const cw = xOf(epoch.end) - left;
-          const top = yOf(band.upper);
-          const ch = yOf(band.lower) - top;
+          const rawLeft = xOf(epoch.start);
+          const rawCw = xOf(epoch.end) - rawLeft;
+          const rawTop = yOf(band.upper);
+          const rawCh = yOf(band.lower) - rawTop;
           const base = cellColors[cell.state];
           // Your-model EV vs the priced multiplier. A tilt (you expect calmer
           // realized vol than implied) makes centre bands underpriced → +EV,
@@ -615,37 +577,50 @@ export default function GridChart({ s }: { s: GridState }) {
             const f = cellMode === 'edge' ? edgeFill(ev) : heatFill(cell.prob);
             c = { ...base, bg: f.bg, border: f.border };
           }
-          const big = cw > 46 && ch > 22;
-          // Font scales with cell size so text fits on zoom/resize instead of
-          // overflowing small cells or looking tiny in large ones.
-          const fs = Math.max(8, Math.min(13, Math.min(cw * 0.125, ch * 0.55)));
-          const fsSub = Math.max(7, fs * 0.82);
-          const isFocused = epoch.id === s.focusedEpoch;
+          const isFuture = epoch.start > s.now;
+          const isLive = !isFuture && !isPast;
           const key = `${epoch.id}:${band.idx}`;
           const animInfo = animatingKeys.get(key);
           const isAnimating = Boolean(animInfo);
+          const isErupting = eruptingWinKeys.has(key);
+          const isActive = isAnimating || isErupting;
+
+          // Freeze cell position the first tick an animation starts so time-drift
+          // doesn't jitter the element while the keyframe runs.
+          if (isActive && !animFrozenPos.current.has(key)) {
+            animFrozenPos.current.set(key, {
+              left: rawLeft + 1,
+              top: rawTop + 1,
+              width: Math.max(0, rawCw - 2),
+              height: Math.max(0, rawCh - 2),
+            });
+          } else if (!isActive && animFrozenPos.current.has(key)) {
+            animFrozenPos.current.delete(key);
+          }
+          const frozen = animFrozenPos.current.get(key);
+          const left = frozen?.left ?? rawLeft + 1;
+          const top = frozen?.top ?? rawTop + 1;
+          const cw = frozen?.width ?? Math.max(0, rawCw - 2);
+          const ch = frozen?.height ?? Math.max(0, rawCh - 2);
+
+          const big = cw > 46 && ch > 22;
+          const fs = Math.max(10, Math.min(16, Math.min(cw * 0.155, ch * 0.65)));
+          const fsSub = Math.max(9, fs * 0.82);
+          const isFocused = epoch.id === s.focusedEpoch;
           const isPastChosen = isPast && s.legs.has(key) && animatedCellsRef.current.has(key);
           const animTone =
             animInfo?.tone === 'win'
-              ? {
-                  bg: 'rgba(245,193,66,0.34)',
-                  border: '#f5c142',
-                  color: '#f5c142',
-                }
+              ? { bg: 'rgba(245,193,66,0.34)', border: '#f5c142', color: '#f5c142' }
               : animInfo?.tone === 'lose'
-                ? {
-                    bg: 'rgba(242,53,70,0.2)',
-                    border: '#f23546',
-                    color: '#f23546',
-                  }
+                ? { bg: 'rgba(242,53,70,0.2)', border: '#f23546', color: '#f23546' }
                 : null;
           return (
             <div
               key={key}
               id={`cell-${epoch.id}-${band.idx}`}
-              onPointerDown={isPast ? undefined : () => onCellDown(epoch, band)}
+              onPointerDown={!isFuture ? undefined : () => onCellDown(epoch, band)}
               onPointerEnter={(e) => {
-                if (!isPast) onCellEnter(epoch, band);
+                if (isFuture) onCellEnter(epoch, band);
                 const rect = ref.current?.getBoundingClientRect();
                 setHover({
                   lower: band.lower,
@@ -655,6 +630,7 @@ export default function GridChart({ s }: { s: GridState }) {
                   cost: cell.cost,
                   mx: rect ? e.clientX - rect.left : 0,
                   my: rect ? e.clientY - rect.top : 0,
+                  locked: isLive,
                 });
               }}
               onPointerMove={(e) => {
@@ -670,50 +646,37 @@ export default function GridChart({ s }: { s: GridState }) {
                 );
               }}
               onPointerLeave={() => setHover(null)}
-              onClick={isPast ? undefined : () => s.setFocusedEpoch(epoch.id)}
-              className={`absolute flex flex-col items-center justify-center transition-colors ${
-                isAnimating ? 'animate-fall-out' : ''
-              }`}
+              onClick={!isFuture ? undefined : () => s.setFocusedEpoch(epoch.id)}
+              className={`absolute flex flex-col items-center justify-center ${
+                isActive ? '' : 'transition-colors'
+              } ${isAnimating ? 'animate-fall-out' : isErupting ? 'animate-win-erupt' : ''}`}
               style={{
-                left: left + 1,
-                top: top + 1,
-                width: Math.max(0, cw - 2),
-                height: Math.max(0, ch - 2),
+                left,
+                top,
+                width: cw,
+                height: ch,
                 background: animTone?.bg ?? c.bg,
                 border: `1px solid ${animTone?.border ?? c.border}`,
                 borderRadius: 4,
                 opacity: isPastChosen && !isAnimating ? 0 : c.opacity,
-                cursor: isPast ? 'default' : 'pointer',
-                outline: isFocused && !isPast ? '1px solid rgba(128,125,254,0.35)' : 'none',
+                cursor: isFuture ? 'pointer' : 'default',
+                outline: isFocused && isFuture ? '1px solid rgba(128,125,254,0.35)' : 'none',
                 outlineOffset: -1,
                 color: animTone?.color,
-                textShadow: animInfo ? '0 0 8px currentColor' : undefined,
                 zIndex: isAnimating ? 50 : undefined,
+                willChange: isActive ? 'transform, opacity, box-shadow' : undefined,
               }}
             >
-              {isAnimating && animInfo?.text && (
-                <span
-                  className="font-bold whitespace-nowrap"
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: fs,
-                    lineHeight: 1.1,
-                  }}
-                >
-                  {animInfo.text}
-                </span>
-              )}
-              {!isAnimating && big && cell.state === 'available' && (
+              {!isAnimating && !isLive && big && cell.state === 'available' && (
                 <span
                   className="font-semibold whitespace-nowrap"
                   style={{
                     fontFamily: 'var(--font-mono)',
                     fontSize: fs,
                     lineHeight: 1.1,
-                    color:
-                      cellMode === 'edge'
-                        ? ev >= 0 ? '#19e6bd' : '#f23546'
-                        : 'var(--color-text-tertiary)',
+                    color: cellMode === 'edge'
+                      ? ev >= 0 ? '#19e6bd' : '#f23546'
+                      : 'var(--color-text-tertiary)',
                   }}
                 >
                   {cellMode === 'edge'
@@ -721,7 +684,7 @@ export default function GridChart({ s }: { s: GridState }) {
                     : `${cell.multiplier.toFixed(2)}x`}
                 </span>
               )}
-              {!isAnimating && big && cell.state === 'selected' && (
+              {!isAnimating && !isLive && big && cell.state === 'selected' && (
                 <>
                   <span className="font-bold text-text-primary whitespace-nowrap" style={{ fontSize: fs, lineHeight: 1.1 }}>{cell.multiplier.toFixed(2)}x</span>
                   <span className="text-accent-light whitespace-nowrap" style={{ fontFamily: 'var(--font-mono)', fontSize: fsSub, lineHeight: 1.1 }}>
@@ -776,36 +739,17 @@ export default function GridChart({ s }: { s: GridState }) {
           </linearGradient>
         </defs>
 
-        {/* Area fill */}
         {chartStyle === 'area' && areaPath && (
           <path d={areaPath} fill="url(#areaFill)" stroke="none" />
         )}
 
-        {/* Line / area stroke (glow) */}
         {!isCandle && linePts && (
           <>
-            <polyline
-              points={linePts}
-              fill="none"
-              stroke="#0b9981"
-              strokeWidth={5}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              opacity={0.28}
-              filter="url(#priceGlow)"
-            />
-            <polyline
-              points={linePts}
-              fill="none"
-              stroke="#19e6bd"
-              strokeWidth={1.75}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-            />
+            <polyline points={linePts} fill="none" stroke="#0b9981" strokeWidth={5} strokeLinejoin="round" strokeLinecap="round" opacity={0.28} filter="url(#priceGlow)" />
+            <polyline points={linePts} fill="none" stroke="#19e6bd" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
           </>
         )}
 
-        {/* Candlesticks / Heikin-Ashi — hollow up, filled down, glowing last */}
         {isCandle &&
           candles.map((cd, i) => {
             const up = cd.c >= cd.o;
@@ -817,50 +761,14 @@ export default function GridChart({ s }: { s: GridState }) {
             const bw = forming ? candleW + 1 : candleW;
             return (
               <g key={cd.t} filter={forming ? 'url(#priceGlow)' : undefined} opacity={forming ? 1 : 0.92}>
-                {/* wick */}
-                <line
-                  x1={cx}
-                  x2={cx}
-                  y1={yOf(cd.h)}
-                  y2={yOf(cd.l)}
-                  stroke={col}
-                  strokeWidth={forming ? 1.3 : 1}
-                  strokeLinecap="round"
-                />
-                {/* body — up candles hollow, down candles filled */}
-                <rect
-                  x={cx - bw / 2}
-                  y={bodyTop}
-                  width={bw}
-                  height={bodyH}
-                  rx={1}
-                  fill={up ? `${col}26` : col}
-                  stroke={col}
-                  strokeWidth={1.1}
-                />
+                <line x1={cx} x2={cx} y1={yOf(cd.h)} y2={yOf(cd.l)} stroke={col} strokeWidth={forming ? 1.3 : 1} strokeLinecap="round" />
+                <rect x={cx - bw / 2} y={bodyTop} width={bw} height={bodyH} rx={1} fill={up ? `${col}26` : col} stroke={col} strokeWidth={1.1} />
               </g>
             );
           })}
-        <line
-          x1={PAD_L}
-          x2={w - PAD_R}
-          y1={priceY}
-          y2={priceY}
-          stroke="rgba(255,255,255,0.45)"
-          strokeWidth={1}
-          strokeDasharray="4 4"
-        />
-        <line
-          x1={nowX}
-          x2={nowX}
-          y1={PAD_T}
-          y2={h - PAD_B}
-          stroke="#807dfe"
-          strokeWidth={1}
-          strokeDasharray="3 3"
-          opacity={0.7}
-        />
-        {/* glowing price dot */}
+
+        <line x1={PAD_L} x2={w - PAD_R} y1={priceY} y2={priceY} stroke="rgba(255,255,255,0.45)" strokeWidth={1} strokeDasharray="4 4" />
+        <line x1={nowX} x2={nowX} y1={PAD_T} y2={h - PAD_B} stroke="#807dfe" strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
         <circle cx={nowX} cy={priceY} r={6} fill="#19e6bd" opacity={0.3} filter="url(#priceGlow)" />
         <circle cx={nowX} cy={priceY} r={3.5} fill="#19e6bd">
           <animate attributeName="r" values="3.5;4.5;3.5" dur="1.8s" repeatCount="indefinite" />
@@ -871,8 +779,8 @@ export default function GridChart({ s }: { s: GridState }) {
       {visibleStrikes.map((p) => (
         <span
           key={`pl${p}`}
-          className="absolute text-[9px] text-text-quaternary pointer-events-none"
-          style={{ right: 6, top: yOf(p) - 6, fontFamily: 'var(--font-mono)' }}
+          className="absolute text-[11px] text-text-quaternary pointer-events-none"
+          style={{ right: 6, top: yOf(p) - 7, fontFamily: 'var(--font-mono)' }}
         >
           {p.toFixed(0)}
         </span>
@@ -880,8 +788,8 @@ export default function GridChart({ s }: { s: GridState }) {
 
       {/* live price chip */}
       <span
-        className="absolute text-[10px] font-bold text-white px-1 rounded-[3px] pointer-events-none"
-        style={{ right: 2, top: priceY - 8, background: '#0b9981', fontFamily: 'var(--font-mono)' }}
+        className="absolute text-[12px] font-bold text-white px-1.5 py-0.5 rounded-[4px] pointer-events-none"
+        style={{ right: 2, top: priceY - 10, background: '#0b9981', fontFamily: 'var(--font-mono)' }}
       >
         {s.price.toFixed(2)}
       </span>
@@ -897,7 +805,7 @@ export default function GridChart({ s }: { s: GridState }) {
         return (
           <span
             key={`tl${e.id}`}
-            className={`absolute text-[9px] pointer-events-none flex flex-col items-center ${
+            className={`absolute text-[11px] pointer-events-none flex flex-col items-center ${
               isCurrent ? 'text-brand-violet font-bold' : 'text-text-quaternary'
             }`}
             style={{
@@ -927,7 +835,7 @@ export default function GridChart({ s }: { s: GridState }) {
           return (
             <div key={`live${e.id}`} className="pointer-events-none">
               <span
-                className="absolute z-20 flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] text-[8px] font-bold uppercase tracking-widest"
+                className="absolute z-20 flex items-center gap-1 px-2 py-0.5 rounded-[4px] text-[10px] font-bold uppercase tracking-widest"
                 style={{
                   left: left + cw / 2,
                   top: PAD_T + 2,
@@ -956,10 +864,10 @@ export default function GridChart({ s }: { s: GridState }) {
       {/* hover tooltip */}
       {hover && (
         <div
-          className="absolute z-20 pointer-events-none rounded-xl border border-white/10 bg-[#0a0c16]/85 backdrop-blur-md px-3.5 py-2 shadow-2xl transition-all duration-150"
+          className="absolute z-20 pointer-events-none rounded-xl border border-white/10 bg-[#0a0c16]/85 backdrop-blur-md px-3.5 py-2 shadow-2xl"
           style={{
-            left: Math.min(hover.mx + 14, w - 165),
-            top: Math.min(hover.my + 14, h - 80),
+            left: Math.min(hover.mx + 14, w - 175),
+            top: Math.min(hover.my + 14, h - 90),
           }}
         >
           <div className="text-[11px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
@@ -973,6 +881,14 @@ export default function GridChart({ s }: { s: GridState }) {
             <span className="text-bullish-green font-bold">{hover.mult.toFixed(2)}x</span>
             <span className="text-text-secondary">${hover.cost.toFixed(2)}</span>
           </div>
+          {hover.locked && (
+            <div className="flex items-center gap-1 mt-1.5 text-[9px] font-semibold uppercase tracking-wider" style={{ color: '#a6a3ff' }}>
+              <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor">
+                <path d="M7.5 4.5H7V3C7 1.62 5.88.5 4.5.5S2 1.62 2 3v1.5H1.5C.95 4.5.5 4.95.5 5.5v3c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-3c0-.55-.45-1-1-1zm-4-1.5C3.5 2.12 3.88 1.5 4.5 1.5S5.5 2.12 5.5 3v1.5h-2V3z"/>
+              </svg>
+              Live · Betting closed
+            </div>
+          )}
         </div>
       )}
       </div>

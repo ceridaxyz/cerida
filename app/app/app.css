@@ -221,3 +221,54 @@ body {
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
 }
+
+/* --- Dapp-kit Custom Theme Overrides (Portals) --- */
+:root {
+  --dapp-kit-blurs-modalOverlay: blur(8px);
+  --dapp-kit-backgroundColors-modalOverlay: rgba(0, 0, 0, 0.75);
+  --dapp-kit-backgroundColors-modalPrimary: #161616;
+  --dapp-kit-backgroundColors-modalSecondary: #1c1c1c;
+  --dapp-kit-backgroundColors-walletItemHover: rgba(255, 255, 255, 0.05);
+  --dapp-kit-backgroundColors-walletItemSelected: rgba(255, 255, 255, 0.1);
+  --dapp-kit-backgroundColors-iconButton: transparent;
+  --dapp-kit-backgroundColors-iconButtonHover: rgba(255, 255, 255, 0.08);
+  --dapp-kit-backgroundColors-primaryButton: #ffffff;
+  --dapp-kit-backgroundColors-primaryButtonHover: rgba(255, 255, 255, 0.9);
+  --dapp-kit-backgroundColors-outlineButtonHover: rgba(255, 255, 255, 0.05);
+  --dapp-kit-borderColors-outlineButton: #2d2d2d;
+  --dapp-kit-colors-primaryButton: #000000;
+  --dapp-kit-colors-outlineButton: #ffffff;
+  --dapp-kit-colors-body: #ffffff;
+  --dapp-kit-colors-bodyMuted: rgba(255, 255, 255, 0.6);
+  --dapp-kit-colors-bodyDanger: #ff4d4d;
+  --dapp-kit-colors-iconButton: #ffffff;
+  --dapp-kit-radii-small: 6px;
+  --dapp-kit-radii-medium: 10px;
+  --dapp-kit-radii-large: 14px;
+  --dapp-kit-radii-xlarge: 18px;
+  --dapp-kit-shadows-primaryButton: none;
+  --dapp-kit-shadows-walletItemSelected: none;
+  --dapp-kit-fontWeights-normal: 400;
+  --dapp-kit-fontWeights-medium: 600;
+  --dapp-kit-fontWeights-bold: 900;
+  --dapp-kit-fontSizes-small: 11px;
+  --dapp-kit-fontSizes-medium: 13px;
+  --dapp-kit-fontSizes-large: 16px;
+  --dapp-kit-fontSizes-xlarge: 20px;
+  --dapp-kit-typography-fontFamily: 'Berkeley Mono', ui-monospace, monospace;
+}
+
+/* Force backdrop blur filter on all dapp-kit overlays */
+div[data-dapp-kit] > div:first-child,
+.dapp-kit-modal-overlay,
+div[class*="ConnectModal_overlay"],
+div[class*="ConnectModal_overlay__"] {
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  background-color: rgba(0, 0, 0, 0.75) !important;
+}
+
+/* Ensure modal dialog matches our typography */
+div[data-dapp-kit] {
+  font-family: 'Berkeley Mono', ui-monospace, monospace !important;
+}

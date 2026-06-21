@@ -6,6 +6,8 @@ import {
   animate,
 } from 'framer-motion';
 import { IconChevronDown, IconPlus } from '@tabler/icons-react';
+import { useCurrentAccount } from '@mysten/dapp-kit';
+import OnboardingModal from '../onboarding-modal';
 import { useComboDispatch } from './combo-context';
 
 const BASE_EDGE = 0.06;
@@ -343,7 +345,16 @@ function LeverageSlider({
   );
 }
 
-const TradingPanel = () => {
+interface TradingPanelProps {
+  oracle_id?: string
+  asset?: string
+  expiry?: bigint
+  strike?: bigint
+}
+
+const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanelProps = {}) => {
+  const account = useCurrentAccount();
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [direction, setDirection] = useState<'buy' | 'sell'>('buy');
   const [orderType, setOrderType] = useState<'market' | 'limit' | 'pro'>(
     'market',
@@ -508,16 +519,29 @@ const TradingPanel = () => {
 
       {/* Sign in CTA + Add to Combo */}
       <div className="px-3 pb-3 flex flex-col gap-1.5 shrink-0">
-        <button className="w-full py-2.5 bg-bullish-green text-[#1a1a1a] text-[13px] font-semibold rounded-[8px] hover:opacity-90 transition-opacity">
-          Sign in
-        </button>
+        {account ? (
+          <button className="w-full py-2.5 bg-bullish-green text-[#1a1a1a] text-[13px] font-semibold rounded-[8px] hover:opacity-90 transition-opacity">
+            {direction === 'buy' ? buyLabel : sellLabel}
+          </button>
+        ) : (
+          <button
+            onClick={() => setOnboardingOpen(true)}
+            className="w-full py-2.5 bg-bullish-green text-[#1a1a1a] text-[13px] font-semibold rounded-[8px] hover:opacity-90 transition-opacity"
+          >
+            Connect Wallet
+          </button>
+        )}
         <button
           onClick={() => addLeg({
-            id:         `trade-${direction}`,
-            label:      `${direction === 'buy' ? 'YES' : 'NO'} BTC/USD`,
+            id:         `trade-${direction}-${strike ?? 0}`,
+            label:      `${direction === 'buy' ? 'YES' : 'NO'} ${asset}/USD`,
             direction:  direction === 'buy' ? 'yes' : 'no',
             prob:       direction === 'buy' ? buyCents / 100 : (100 - buyCents) / 100,
             multiplier: (1 - BASE_EDGE) / (direction === 'buy' ? buyCents / 100 : (100 - buyCents) / 100),
+            oracle_id,
+            asset,
+            expiry,
+            strike,
           })}
           className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium rounded-[7px] transition-colors"
           style={{
@@ -530,6 +554,8 @@ const TradingPanel = () => {
           Add to Combo
         </button>
       </div>
+
+      <OnboardingModal open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
     </div>
   );
 };
