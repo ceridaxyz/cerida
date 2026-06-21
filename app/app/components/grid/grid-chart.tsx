@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import type { GridState } from './use-grid-state';
 import type { Band, Epoch } from './types';
+import type { WorkerPayload, SerialCell } from './grid-worker';
 import { realizedVol } from './analytics';
 
 const PAD_T = 8;
@@ -13,23 +14,7 @@ const EPOCH_MS = 60_000;
 const WIN_PAST = 4 * EPOCH_MS;
 const CANDLE_MS = 4_500;
 
-// Theme literals (canvas needs concrete colors, not CSS vars).
-const C = {
-  tertiary: '#b0b5bd',
-  quaternary: '#8e939b',
-  primary: '#ffffff',
-  accent: '#a5a3ff',
-  violet: '#807dfe',
-  green: '#0b9981',
-  greenBright: '#19e6bd',
-  red: '#f23546',
-  gold: '#f5c142',
-};
-
-function fmtTime(t: number) {
-  const d = new Date(t);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
+const C_BRIGHT = '#19e6bd';
 
 const cellColors = {
   available: { bg: 'rgba(128,125,254,0.05)', border: 'rgba(255,255,255,0.08)', opacity: 1 },
@@ -41,8 +26,8 @@ const cellColors = {
   expired: { bg: 'rgba(255,255,255,0.02)', border: 'rgba(255,255,255,0.04)', opacity: 0.5 },
 } as const;
 
-// Pre-baked into 8 discrete buckets so Path2D batching collapses ~100 unique
-// fill colors down to 8. Visual difference vs continuous is imperceptible.
+// Pre-baked lookup tables (identical to the worker — main thread uses them for the
+// cells useMemo which feeds hit-testing AND the serialised worker payload).
 const HEAT_BUCKETS = 8;
 const HEAT_TABLE = (() => {
   const out: { bg: string; border: string }[] = [];
@@ -57,10 +42,8 @@ const HEAT_TABLE = (() => {
   return out;
 })();
 function heatFill(prob: number) {
-  const idx = Math.round(Math.min(1, prob / 0.45) * (HEAT_BUCKETS - 1));
-  return HEAT_TABLE[idx]!;
+  return HEAT_TABLE[Math.round(Math.min(1, prob / 0.45) * (HEAT_BUCKETS - 1))]!;
 }
-
 const EDGE_BUCKETS = 8;
 const EDGE_TABLE_POS = (() => {
   const out: { bg: string; border: string }[] = [];
@@ -99,17 +82,6 @@ interface CellDatum {
   mult: number; ev: number; evColor: string; prob: number; cost: number; uPnl: number | undefined;
 }
 
-// Mutable view snapshot the rAF loop reads without re-subscribing.
-interface View {
-  s: GridState; w: number; h: number;
-  chartStyle: ChartStyle; cellMode: 'mult' | 'edge'; showIso: boolean;
-  visBands: number; yOffset: number; winFuture: number; xOffset: number;
-  cells: CellDatum[];
-  candles: { o: number; h: number; l: number; c: number; t: number }[];
-  skip: Set<string>; // keys drawn by the DOM overlay instead
-  focusedLegKey: string | null;
-}
-
 interface Scale {
   plotW: number; plotH: number;
   winStart: number; winEnd: number; tSpan: number;
@@ -131,7 +103,6 @@ export default function GridChart({
   const { w, h } = size;
 
   // Hover is kept in a ref — tooltip updates imperatively to avoid re-renders on every pointermove.
-  const hoverRef = useRef<Hover | null>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const tipRangeEl = useRef<HTMLDivElement>(null);
   const tipProbEl = useRef<HTMLSpanElement>(null);
@@ -141,7 +112,6 @@ export default function GridChart({
 
   const [chartStyle, setChartStyle] = useState<ChartStyle>('line');
   const [cellMode, setCellMode] = useState<'mult' | 'edge'>('mult');
-  const [showIso] = useState(false);
   const isCandle = chartStyle === 'candles' || chartStyle === 'heikin';
 
   const [visBands, setVisBands] = useState(14);
@@ -151,12 +121,12 @@ export default function GridChart({
 
   const dragging = useRef(false);
   const dragMode = useRef<'add' | 'remove'>('add');
+  const workerRef = useRef<Worker | null>(null);
 
-  // ── animations (kept as DOM overlay) ──────────────────────────────────────
+  // ── animations (DOM overlay) ───────────────────────────────────────────────
   const activatedRef = useRef<Set<string>>(new Set());
   const eruptingBandsRef = useRef<Set<string>>(new Set());
   const animFrozenPos = useRef<Map<string, { left: number; top: number; width: number; height: number }>>(new Map());
-  // Selected boxes whose epoch just went live → box pops, text falls out.
   const [poppingKeys, setPoppingKeys] = useState<Map<string, { text: string }>>(new Map());
   const [eruptingWinKeys, setEruptingWinKeys] = useState<Set<string>>(new Set());
   const isFirstRender = useRef(true);
@@ -173,7 +143,7 @@ export default function GridChart({
     return () => ro.disconnect();
   }, []);
 
-  // ── wheel zoom ──────────────────────────────────────────────────────────────
+  // ── wheel zoom ───────────────────────────────────────────────────────────
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -196,7 +166,7 @@ export default function GridChart({
   const ivRv = rvPct > 0 ? ivPct / rvPct : 0;
   const rich = ivRv >= 1.1 ? 'RICH' : ivRv > 0 && ivRv <= 0.9 ? 'CHEAP' : 'FAIR';
 
-  // ── strike → uniform band coordinate ──────────────────────────────────────
+  // ── strike → uniform band coordinate ─────────────────────────────────────
   const lastStrike = s.strikes.length - 1;
   const strikeStep = (s.strikes[1] ?? 0) - (s.strikes[0] ?? 0) || 1;
   const bandCoordOf = useMemo(() => {
@@ -205,14 +175,14 @@ export default function GridChart({
       if (price <= strikes[0]!) return (price - strikes[0]!) / ((strikes[1]! - strikes[0]!) || 1);
       if (price >= strikes[lastStrike]!) return lastStrike + (price - strikes[lastStrike]!) / ((strikes[lastStrike]! - strikes[lastStrike - 1]!) || 1);
       for (let i = 0; i < lastStrike; i++) {
-        const lo = strikes[i]!; const hi = strikes[i + 1]!;
+        const lo = strikes[i]!, hi = strikes[i + 1]!;
         if (price < hi) return i + (price - lo) / (hi - lo);
       }
       return lastStrike;
     };
   }, [s.strikes, lastStrike]);
 
-  // ── per-cell content (data cadence, not per-frame) ────────────────────────
+  // ── per-cell content (data cadence; also used for hit-testing) ────────────
   const cells = useMemo<CellDatum[]>(() => {
     const center = bandCoordOf(s.price);
     const coordMin = center - visBands / 2 + yOffset - 2;
@@ -230,8 +200,7 @@ export default function GridChart({
         const cell = s.cellFor(epoch, band);
         const base = cellColors[cell.state];
         let ev = 0;
-        let bg: string = base.bg;
-        let border: string = base.border;
+        let bg: string = base.bg, border: string = base.border;
         if (cell.state === 'available') {
           const mid = (band.lower + band.upper) / 2;
           const closeness = Math.exp(-0.5 * ((mid - s.price) / (3 * strikeStep)) ** 2);
@@ -244,7 +213,7 @@ export default function GridChart({
           key: `${epoch.id}:${band.idx}`, epoch, band, lower: band.lower, upper: band.upper,
           state: cell.state, bg, border, opacity: base.opacity,
           isFuture, isLive, isPast, mult: cell.multiplier, ev,
-          evColor: ev >= 0 ? C.greenBright : C.red, prob: cell.prob, cost: cell.cost, uPnl: cell.uPnl,
+          evColor: ev >= 0 ? C_BRIGHT : '#f23546', prob: cell.prob, cost: cell.cost, uPnl: cell.uPnl,
         });
       }
     }
@@ -274,332 +243,80 @@ export default function GridChart({
     return ha;
   }, [s.history, isCandle, chartStyle]);
 
-  // ── view snapshot + scale ref for the loop & hit-testing ──────────────────
+  // ── skip set (keys rendered by DOM overlay, not canvas) ───────────────────
   const skip = useMemo(() => {
     const set = new Set<string>(eruptingWinKeys);
     for (const k of poppingKeys.keys()) set.add(k);
     return set;
   }, [eruptingWinKeys, poppingKeys]);
 
-  const viewRef = useRef<View>(null as unknown as View);
-  viewRef.current = { s, w, h, chartStyle, cellMode, showIso, visBands, yOffset, winFuture, xOffset, cells, candles, skip, focusedLegKey };
-  const scaleRef = useRef<Scale | null>(null);
-  const displayPriceRef = useRef(s.price);
-  // Cached 2d context — avoids getContext() on every rAF frame.
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  // Pre-filtered history window updated on data tick, not per-frame.
-  const histWindowRef = useRef<typeof s.history>([]);
-
-  const computeScale = (v: View, displayPrice: number, liveNow: number): Scale => {
-    const plotW = Math.max(1, v.w - PAD_L - PAD_R);
-    const plotH = Math.max(1, v.h - PAD_T - PAD_B);
+  // ── scale helper (for hit-testing; worker has its own copy) ───────────────
+  const computeScale = (displayPrice: number, liveNow: number): Scale => {
+    const plotW = Math.max(1, w - PAD_L - PAD_R);
+    const plotH = Math.max(1, h - PAD_T - PAD_B);
     const center = bandCoordOf(displayPrice);
-    const coordMin = center - v.visBands / 2 + v.yOffset;
-    const coordMax = center + v.visBands / 2 + v.yOffset;
-    const winStart = liveNow - WIN_PAST + v.xOffset;
-    const winEnd = liveNow + v.winFuture + v.xOffset;
-    return { plotW, plotH, winStart, winEnd, tSpan: winEnd - winStart, coordMin, coordMax, coordSpan: (coordMax - coordMin) || 1 };
+    const coordMin = center - visBands / 2 + yOffset;
+    const coordMax = center + visBands / 2 + yOffset;
+    const winStart = liveNow - WIN_PAST + xOffset;
+    const winEnd = liveNow + winFuture + xOffset;
+    return { plotW, plotH, winStart, winEnd, tSpan: (winEnd - winStart) || 1, coordMin, coordMax, coordSpan: (coordMax - coordMin) || 1 };
   };
 
-  // ── render loop ───────────────────────────────────────────────────────────
+  // ── worker: init on mount, transfer canvas ownership ─────────────────────
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const draw = (ts: number) => {
-      const v = viewRef.current;
-      const canvas = canvasRef.current;
-      const dt = ts - last; last = ts;
-      if (!canvas || v.w < 2 || v.h < 2) { raf = requestAnimationFrame(draw); return; }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const worker = new Worker(new URL('./grid-worker.ts', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
+    const offscreen = canvas.transferControlToOffscreen();
+    worker.postMessage({ type: 'init', canvas: offscreen, initialPrice: s.price }, [offscreen]);
+    return () => { worker.terminate(); workerRef.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-      // ease displayed price toward the live target
-      displayPriceRef.current += (v.s.price - displayPriceRef.current) * Math.min(1, dt / 120);
-      const price = displayPriceRef.current;
-      const liveNow = Date.now();
+  // ── worker: post updated data whenever state that affects drawing changes ──
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!worker) return;
 
-      const sc = computeScale(v, price, liveNow);
-      scaleRef.current = sc;
+    // Pre-sample sigma for the expected-move cone (24 points across the future window).
+    const now = Date.now();
+    const futureEnd = now + winFuture + xOffset;
+    const sigmaPoints: WorkerPayload['sigmaPoints'] = Array.from({ length: 24 }, (_, i) => {
+      const t = now + ((futureEnd - now) * i) / 23;
+      return { t, sigma: s.sigmaAtTime(t) };
+    });
 
-      const dpr = window.devicePixelRatio || 1;
-      const needsResize = canvas.width !== Math.round(v.w * dpr) || canvas.height !== Math.round(v.h * dpr);
-      if (needsResize) {
-        canvas.width = Math.round(v.w * dpr);
-        canvas.height = Math.round(v.h * dpr);
-        ctxRef.current = null; // context survives resize but reset just in case
-      }
-      if (!ctxRef.current) ctxRef.current = canvas.getContext('2d')!;
-      const ctx = ctxRef.current;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, v.w, v.h);
+    const serialCells: SerialCell[] = cells.map((c) => ({
+      key: c.key,
+      epochStart: c.epoch.start, epochEnd: c.epoch.end,
+      bandLower: c.band.lower, bandUpper: c.band.upper,
+      bg: c.bg, border: c.border, opacity: c.opacity,
+      isLive: c.isLive, state: c.state,
+      mult: c.mult, ev: c.ev, evColor: c.evColor,
+      uPnl: c.uPnl,
+      legCost: c.state === 'selected' ? (s.legs.get(c.key)?.cost ?? s.stake) : undefined,
+    }));
 
-      const xOf = (t: number) => PAD_L + ((t - sc.winStart) / sc.tSpan) * sc.plotW;
-      const yOf = (p: number) => PAD_T + ((sc.coordMax - bandCoordOf(p)) / sc.coordSpan) * sc.plotH;
-      const nowX = xOf(liveNow);
-      const priceY = yOf(price);
-
-      // gridlines — batched into 2 draw calls instead of N
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-      ctx.beginPath();
-      for (const st of v.s.strikes) {
-        const y = yOf(st);
-        if (y < PAD_T - 2 || y > v.h - PAD_B + 2) continue;
-        ctx.moveTo(PAD_L, y); ctx.lineTo(v.w - PAD_R, y);
-      }
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-      ctx.beginPath();
-      for (const e of v.s.epochs) {
-        const x = xOf(e.start);
-        if (x < PAD_L - 2 || x > v.w - PAD_R + 2) continue;
-        ctx.moveTo(x, PAD_T); ctx.lineTo(x, v.h - PAD_B);
-      }
-      ctx.stroke();
-
-      // expected-move cone (±1σ)
-      if (sc.winEnd > liveNow) {
-        const steps = 16;
-        const startT = Math.max(liveNow, sc.winStart);
-        const up: [number, number][] = [];
-        const lo: [number, number][] = [];
-        for (let i = 0; i <= steps; i++) {
-          const t = startT + ((sc.winEnd - startT) * i) / steps;
-          const sig = v.s.sigmaAtTime(t);
-          up.push([xOf(t), yOf(price + sig)]);
-          lo.push([xOf(t), yOf(price - sig)]);
-        }
-        ctx.beginPath();
-        ctx.moveTo(up[0]![0], up[0]![1]);
-        for (const [x, y] of up) ctx.lineTo(x, y);
-        for (let i = lo.length - 1; i >= 0; i--) ctx.lineTo(lo[i]![0], lo[i]![1]);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(128,125,254,0.07)';
-        ctx.fill();
-        ctx.setLineDash([2, 3]);
-        ctx.strokeStyle = 'rgba(128,125,254,0.3)';
-        for (const arr of [up, lo]) {
-          ctx.beginPath();
-          ctx.moveTo(arr[0]![0], arr[0]![1]);
-          for (const [x, y] of arr) ctx.lineTo(x, y);
-          ctx.stroke();
-        }
-        ctx.setLineDash([]);
-      }
-
-      // cells — Phase 1: batch fills + strokes by color to minimize canvas state changes.
-      // Instead of N×(fillStyle+fill+strokeStyle+stroke) we do K×(fill+stroke) where K
-      // is the number of unique color buckets (~15-20) vs N visible cells (~100-160).
-      type BatchEntry = { fillPath: Path2D; strokePath: Path2D; opacity: number; strokeW: number };
-      const batches = new Map<string, BatchEntry>();
-      type GeomEntry = { c: CellDatum; left: number; top: number; cw: number; ch: number };
-      const geomList: GeomEntry[] = [];
-
-      for (const c of v.cells) {
-        if (v.skip.has(c.key)) continue;
-        const left = xOf(c.epoch.start) + 1;
-        const top = yOf(c.band.upper) + 1;
-        const cw = xOf(c.epoch.end) - xOf(c.epoch.start) - 2;
-        const ch = yOf(c.band.lower) - yOf(c.band.upper) - 2;
-        if (cw <= 0 || ch <= 0) continue;
-        if (left > v.w - PAD_R || left + cw < PAD_L || top > v.h - PAD_B || top + ch < PAD_T) continue;
-
-        const isFocused = v.focusedLegKey === c.key;
-        const sw = isFocused ? 2 : 1;
-        const border = isFocused ? '#807dfe' : c.border;
-        const bk = `${c.bg}|${border}|${c.opacity}|${sw}`;
-        let b = batches.get(bk);
-        if (!b) { b = { fillPath: new Path2D(), strokePath: new Path2D(), opacity: c.opacity, strokeW: sw }; batches.set(bk, b); }
-        pathRoundRect(b.fillPath, left, top, cw, ch, 4);
-        pathRoundRect(b.strokePath, left, top, cw, ch, 4);
-        geomList.push({ c, left, top, cw, ch });
-      }
-
-      for (const [bk, b] of batches) {
-        const pipe = bk.indexOf('|');
-        ctx.globalAlpha = b.opacity;
-        ctx.fillStyle = bk.slice(0, pipe);
-        ctx.fill(b.fillPath);
-      }
-      for (const [bk, b] of batches) {
-        const p1 = bk.indexOf('|'); const p2 = bk.indexOf('|', p1 + 1);
-        ctx.globalAlpha = b.opacity;
-        ctx.lineWidth = b.strokeW;
-        ctx.strokeStyle = bk.slice(p1 + 1, p2);
-        ctx.stroke(b.strokePath);
-      }
-      ctx.globalAlpha = 1;
-
-      // cells — Phase 2: text labels (can't batch; only big non-live cells need them).
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      for (const { c, left, top, cw, ch } of geomList) {
-        const big = cw > 46 && ch > 22;
-        if (!big || c.isLive) continue;
-        const fs = Math.max(10, Math.min(16, Math.min(cw * 0.155, ch * 0.65)));
-        const cx = left + cw / 2;
-        const cy = top + ch / 2;
-
-        if (c.state === 'available') {
-          ctx.font = `600 ${fs}px 'Berkeley Mono', monospace`;
-          if (v.cellMode === 'edge') {
-            ctx.fillStyle = c.evColor;
-            ctx.fillText(`${c.ev >= 0 ? '+' : '−'}$${Math.abs(c.ev).toFixed(1)}`, cx, cy);
-          } else {
-            ctx.fillStyle = C.tertiary;
-            ctx.fillText(`${c.mult.toFixed(2)}x`, cx, cy);
-          }
-        } else if (c.state === 'selected') {
-          ctx.font = `700 ${fs}px 'Berkeley Mono', monospace`;
-          ctx.fillStyle = C.primary;
-          ctx.fillText(`${c.mult.toFixed(2)}x`, cx, cy - fs * 0.5);
-          ctx.font = `400 ${Math.max(9, fs * 0.82)}px 'Berkeley Mono', monospace`;
-          ctx.fillStyle = C.accent;
-          const leg = v.s.legs.get(c.key);
-          const legCost = leg ? leg.cost : v.s.stake;
-          ctx.fillText(`$${legCost.toFixed(0)} → $${(legCost * c.mult).toFixed(0)}`, cx, cy + fs * 0.55);
-        } else if (c.state === 'active') {
-          ctx.font = `700 ${fs}px 'Berkeley Mono', monospace`;
-          ctx.fillStyle = (c.uPnl ?? 0) >= 0 ? C.green : C.red;
-          ctx.fillText(`${(c.uPnl ?? 0) >= 0 ? '+$' : '−$'}${Math.abs(c.uPnl ?? 0).toFixed(2)}`, cx, cy);
-        } else if (c.state === 'claimable') {
-          const sub = Math.max(9, fs * 0.82);
-          ctx.fillStyle = C.gold;
-          ctx.font = `700 ${sub}px 'Berkeley Mono', monospace`;
-          ctx.fillText('CLAIM', cx, cy - sub * 0.6);
-          ctx.fillText(`+$${(c.uPnl ?? 0).toFixed(2)}`, cx, cy + sub * 0.6);
-        }
-      }
-
-      // price line / area / candles
-      // Use pre-filtered window ref (updated on data tick, not here in the hot path).
-      // Refresh it whenever the scale window shifts or new data arrives.
-      {
-        const hist = v.s.history;
-        const cached = histWindowRef.current;
-        const needsReslice =
-          cached.length === 0 ||
-          hist.length !== cached.length ||
-          (hist[0]?.t !== cached[0]?.t) ||
-          cached[cached.length - 1]!.t < sc.winStart ||
-          cached[0]!.t > liveNow;
-        if (needsReslice) {
-          histWindowRef.current = hist.filter((p) => p.t >= sc.winStart && p.t <= liveNow);
-        }
-      }
-      const windowHist = histWindowRef.current;
-      if (isCandleStyle(v.chartStyle)) {
-        const candleW = Math.max(2, (CANDLE_MS / sc.tSpan) * sc.plotW - 1.5);
-        v.candles.forEach((cd, i) => {
-          const cxx = xOf(cd.t + CANDLE_MS / 2);
-          if (cxx < PAD_L - candleW || cxx > v.w - PAD_R + candleW) return;
-          const up = cd.c >= cd.o;
-          const col = up ? C.greenBright : C.red;
-          const forming = i === v.candles.length - 1;
-          const bodyTop = Math.min(yOf(cd.o), yOf(cd.c));
-          const bodyH = Math.max(1.2, Math.abs(yOf(cd.c) - yOf(cd.o)));
-          const bw = forming ? candleW + 1 : candleW;
-          ctx.globalAlpha = forming ? 1 : 0.92;
-          ctx.strokeStyle = col; ctx.lineWidth = forming ? 1.3 : 1;
-          ctx.beginPath(); ctx.moveTo(cxx, yOf(cd.h)); ctx.lineTo(cxx, yOf(cd.l)); ctx.stroke();
-          roundRect(ctx, cxx - bw / 2, bodyTop, bw, bodyH, 1);
-          ctx.fillStyle = up ? `${col}26` : col; ctx.fill();
-          ctx.lineWidth = 1.1; ctx.strokeStyle = col; ctx.stroke();
-          ctx.globalAlpha = 1;
-        });
-      } else if (windowHist.length > 1) {
-        if (v.chartStyle === 'area') {
-          const grad = ctx.createLinearGradient(0, PAD_T, 0, v.h - PAD_B);
-          grad.addColorStop(0, 'rgba(25,230,189,0.35)');
-          grad.addColorStop(1, 'rgba(25,230,189,0)');
-          ctx.beginPath();
-          ctx.moveTo(xOf(windowHist[0]!.t), v.h - PAD_B);
-          for (const p of windowHist) ctx.lineTo(xOf(p.t), yOf(p.price));
-          ctx.lineTo(nowX, v.h - PAD_B);
-          ctx.closePath();
-          ctx.fillStyle = grad; ctx.fill();
-        }
-        // Two-pass manual glow: wide faint stroke then narrow bright — avoids shadowBlur
-        // which triggers expensive compositor layer and blocks GPU pipeline.
-        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-        ctx.beginPath();
-        windowHist.forEach((p, i) => { const x = xOf(p.t), y = yOf(p.price); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-        ctx.strokeStyle = 'rgba(11,153,129,0.22)'; ctx.lineWidth = 6;
-        ctx.stroke();
-        ctx.strokeStyle = '#19e6bd'; ctx.lineWidth = 1.75;
-        ctx.stroke();
-      }
-
-      // markers
-      ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(PAD_L, priceY); ctx.lineTo(v.w - PAD_R, priceY); ctx.stroke();
-      ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(128,125,254,0.7)';
-      ctx.beginPath(); ctx.moveTo(nowX, PAD_T); ctx.lineTo(nowX, v.h - PAD_B); ctx.stroke();
-      ctx.setLineDash([]);
-      const pulse = 3.5 + Math.sin(ts / 300) * 0.6;
-      ctx.fillStyle = 'rgba(25,230,189,0.3)';
-      ctx.beginPath(); ctx.arc(nowX, priceY, pulse + 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#19e6bd';
-      ctx.beginPath(); ctx.arc(nowX, priceY, pulse, 0, Math.PI * 2); ctx.fill();
-
-      // price axis labels (right)
-      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      ctx.font = `400 11px 'Berkeley Mono', monospace`;
-      ctx.fillStyle = C.quaternary;
-      for (const st of v.s.strikes) {
-        const y = yOf(st);
-        if (y < PAD_T || y > v.h - PAD_B) continue;
-        ctx.fillText(st.toFixed(0), v.w - 6, y);
-      }
-      // live price chip
-      roundRect(ctx, v.w - 52, priceY - 9, 50, 18, 4);
-      ctx.fillStyle = C.green; ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.font = `700 12px 'Berkeley Mono', monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText(v.s.price.toFixed(2), v.w - 27, priceY);
-
-      // time axis labels (bottom)
-      ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'center';
-      for (const e of v.s.epochs) {
-        const x = xOf(e.start);
-        if (x < PAD_L - 20 || x > v.w - PAD_R + 20) continue;
-        const isCurrent = e.id === v.s.currentEpochId;
-        const isFuture = e.start > liveNow;
-        ctx.fillStyle = isCurrent ? C.violet : C.quaternary;
-        ctx.font = `${isCurrent ? 700 : 400} 11px 'Berkeley Mono', monospace`;
-        ctx.fillText(fmtTime(e.start), x, v.h - 10);
-        if (isCurrent || isFuture) {
-          const remaining = Math.max(0, (e.end - liveNow) / 1000);
-          const mmss = `${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, '0')}`;
-          ctx.fillStyle = isCurrent ? C.accent : 'rgba(142,147,155,0.6)';
-          ctx.font = `400 10px 'Berkeley Mono', monospace`;
-          ctx.fillText(mmss, x, v.h - 1);
-        }
-      }
-
-      // LIVE badge + progress on current column
-      const cur = v.s.epochs.find((e) => e.id === v.s.currentEpochId);
-      if (cur) {
-        const left = xOf(cur.start);
-        const cw = xOf(cur.end) - left;
-        const frac = Math.min(1, Math.max(0, (liveNow - cur.start) / (cur.end - cur.start)));
-        const bx = left + cw / 2;
-        roundRect(ctx, bx - 26, PAD_T + 2, 52, 15, 4);
-        ctx.fillStyle = 'rgba(128,125,254,0.18)'; ctx.fill();
-        ctx.fillStyle = C.green;
-        ctx.beginPath(); ctx.arc(bx - 16, PAD_T + 9.5, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = C.accent; ctx.font = `700 10px 'Berkeley Mono', monospace`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('LIVE', bx + 4, PAD_T + 10);
-        ctx.textBaseline = 'alphabetic';
-        roundRect(ctx, left + 2, v.h - PAD_B - 1, Math.max(0, cw - 4), 3, 1.5);
-        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
-        roundRect(ctx, left + 2, v.h - PAD_B - 1, Math.max(0, (cw - 4) * frac), 3, 1.5);
-        ctx.fillStyle = C.accent; ctx.fill();
-      }
-
-      raf = requestAnimationFrame(draw);
+    const payload: WorkerPayload = {
+      price: s.price, w, h, dpr: window.devicePixelRatio || 1,
+      chartStyle, cellMode, visBands, yOffset, winFuture, xOffset,
+      focusedLegKey,
+      strikes: s.strikes,
+      epochs: s.epochs.map((e) => ({ id: e.id, start: e.start, end: e.end })),
+      currentEpochId: s.currentEpochId,
+      cells: serialCells,
+      history: s.history,
+      candles,
+      skip: [...skip],
+      sigmaPoints,
     };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [bandCoordOf]);
+
+    worker.postMessage({ type: 'data', payload });
+  // s.sigmaAtTime is called inside but s is in deps via cells; s.history for sigma accuracy.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, candles, s.price, s.history, w, h, visBands, yOffset, winFuture, xOffset,
+      chartStyle, cellMode, focusedLegKey, skip, s.currentEpochId]);
 
   // ── settlement / leg animations (DOM overlay) ─────────────────────────────
   useEffect(() => {
@@ -607,17 +324,15 @@ export default function GridChart({
     if (isFirstRender.current) {
       isFirstRender.current = false;
       for (const epoch of s.epochs) {
-        // already-live/past legs shouldn't pop on mount
-        if (epoch.start <= now) {
+        if (epoch.start <= now)
           for (const [key, leg] of s.legs) if (leg.epochId === epoch.id) activatedRef.current.add(key);
-        }
         if (epoch.end <= now) eruptingBandsRef.current.add(`epoch:${epoch.id}`);
       }
       return;
     }
-    const sc = scaleRef.current;
+
     const freeze = (epoch: Epoch, band: Band, key: string) => {
-      if (!sc) return;
+      const sc = computeScale(s.price, Date.now());
       const xOf = (t: number) => PAD_L + ((t - sc.winStart) / sc.tSpan) * sc.plotW;
       const yOf = (p: number) => PAD_T + ((sc.coordMax - bandCoordOf(p)) / sc.coordSpan) * sc.plotH;
       animFrozenPos.current.set(key, {
@@ -627,12 +342,10 @@ export default function GridChart({
       });
     };
 
-    // ── Activation pop: a preselected epoch just went live → pop each of your
-    //    boxes in it and fall its text out. Fires at the START of the epoch.
     for (const [key, leg] of s.legs) {
       if (activatedRef.current.has(key)) continue;
       const epoch = s.epochs.find((e) => e.id === leg.epochId);
-      if (!epoch || epoch.start > now) continue; // not live yet
+      if (!epoch || epoch.start > now) continue;
       const band = s.bands.find((b) => b.idx === leg.bandIdx);
       if (!band) continue;
       activatedRef.current.add(key);
@@ -641,7 +354,6 @@ export default function GridChart({
       setTimeout(() => setPoppingKeys((p) => { const c = new Map(p); c.delete(key); return c; }), 950);
     }
 
-    // ── Settlement eruption: winning band reveal at the END of the epoch.
     for (const epoch of s.epochs) {
       if (epoch.end > now) continue;
       const epochKey = `epoch:${epoch.id}`;
@@ -656,13 +368,13 @@ export default function GridChart({
       setEruptingWinKeys((p) => new Set([...p, winKey]));
       setTimeout(() => setEruptingWinKeys((p) => { const n = new Set(p); n.delete(winKey); return n; }), 2000);
     }
-  }, [s.now, s.epochs, s.bands, s.legs, bandCoordOf, s]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.now, s.epochs, s.bands, s.legs, s]);
 
-  // ── pointer interaction (hit-test on canvas) ──────────────────────────────
+  // ── pointer interaction (hit-test against computed scale) ─────────────────
   const cellAt = (mx: number, my: number) => {
-    const sc = scaleRef.current;
-    if (!sc) return null;
     if (mx < PAD_L || mx > w - PAD_R || my < PAD_T || my > h - PAD_B) return null;
+    const sc = computeScale(s.price, Date.now());
     const t = sc.winStart + ((mx - PAD_L) / sc.plotW) * sc.tSpan;
     const epoch = s.epochs.find((e) => t >= e.start && t < e.end);
     const coord = sc.coordMax - ((my - PAD_T) / sc.plotH) * sc.coordSpan;
@@ -678,19 +390,17 @@ export default function GridChart({
   const onPointerDown = (e: React.PointerEvent) => {
     const { mx, my } = localXY(e);
     const hit = cellAt(mx, my);
-    if (!hit || hit.epoch.start <= s.now) return; // only future is tradeable
+    if (!hit || hit.epoch.start <= s.now) return;
     dragging.current = true;
     const key = `${hit.epoch.id}:${hit.band.idx}`;
     const isAdding = !s.hasLeg(key);
     dragMode.current = isAdding ? 'add' : 'remove';
     s.toggleLeg(hit.epoch, hit.band);
     s.setFocusedEpoch(hit.epoch.id);
-    if (isAdding) {
-      setFocusedLegKey(key);
-    } else {
-      if (focusedLegKey === key) setFocusedLegKey(null);
-    }
+    if (isAdding) setFocusedLegKey(key);
+    else if (focusedLegKey === key) setFocusedLegKey(null);
   };
+
   const showTip = (h: Hover) => {
     const tip = tipRef.current;
     if (!tip) return;
@@ -711,29 +421,20 @@ export default function GridChart({
     if (!hit) { hideTip(); return; }
     const key = `${hit.epoch.id}:${hit.band.idx}`;
     if (dragging.current && hit.epoch.start > s.now) {
-      if (dragMode.current === 'add' && !s.hasLeg(key)) {
-        s.addLeg(hit.epoch, hit.band);
-        setFocusedLegKey(key);
-      }
-      if (dragMode.current === 'remove' && s.hasLeg(key)) {
-        s.removeLeg(key);
-        if (focusedLegKey === key) setFocusedLegKey(null);
-      }
+      if (dragMode.current === 'add' && !s.hasLeg(key)) { s.addLeg(hit.epoch, hit.band); setFocusedLegKey(key); }
+      if (dragMode.current === 'remove' && s.hasLeg(key)) { s.removeLeg(key); if (focusedLegKey === key) setFocusedLegKey(null); }
     }
     const cell = s.cellFor(hit.epoch, hit.band);
-    showTip({
-      lower: hit.band.lower, upper: hit.band.upper, prob: cell.prob, mult: cell.multiplier,
-      cost: cell.cost, mx, my, locked: hit.epoch.start <= s.now && hit.epoch.end > s.now,
-    });
+    showTip({ lower: hit.band.lower, upper: hit.band.upper, prob: cell.prob, mult: cell.multiplier,
+      cost: cell.cost, mx, my, locked: hit.epoch.start <= s.now && hit.epoch.end > s.now });
   };
   const onPointerUp = () => { dragging.current = false; };
   const onPointerLeave = () => { dragging.current = false; hideTip(); };
 
-  // overlay cell lookup by key
   const overlayCells = useMemo(() => {
-    const items: { key: string; text?: string; pop: boolean; erupt: boolean }[] = [];
-    for (const [key, info] of poppingKeys) items.push({ key, text: info.text, pop: true, erupt: false });
-    for (const key of eruptingWinKeys) items.push({ key, pop: false, erupt: true });
+    const items: { key: string; text?: string; pop: boolean }[] = [];
+    for (const [key, info] of poppingKeys) items.push({ key, text: info.text, pop: true });
+    for (const key of eruptingWinKeys) items.push({ key, pop: false });
     return items;
   }, [poppingKeys, eruptingWinKeys]);
 
@@ -742,8 +443,6 @@ export default function GridChart({
       <style>{`
         @keyframes gridWinErupt{0%{transform:scale(1);box-shadow:0 0 0 0 rgba(11,153,129,0);background:rgba(11,153,129,0.16);border-color:#0b9981}10%{transform:scale(1.06);box-shadow:0 0 0 6px rgba(11,153,129,0.5),0 0 50px 12px rgba(11,153,129,0.55),inset 0 0 20px rgba(25,230,189,0.3);background:rgba(25,230,189,0.85);border-color:#19e6bd}28%{transform:scale(1.03);background:rgba(11,153,129,0.75)}65%{transform:scale(1.01);background:rgba(11,153,129,0.6)}100%{transform:scale(1);box-shadow:0 0 6px 1px rgba(11,153,129,0.12);background:rgba(11,153,129,0.5);border-color:#0b9981}}
         .animate-win-erupt{animation:gridWinErupt 1.8s cubic-bezier(0.16,1,0.3,1) forwards;z-index:30}
-        @keyframes gridFallOut{0%{transform:translate3d(0,0,0) rotate(0deg) scale(1);opacity:1;filter:blur(0)}18%{transform:translate3d(0,-7px,0) rotate(-1.5deg) scale(1.025);opacity:1}100%{transform:translate3d(0,150px,0) rotate(12deg) scale(0.72);opacity:0;filter:blur(1px)}}
-        .animate-fall-out{animation:gridFallOut 0.95s cubic-bezier(0.22,0.72,0.16,1) forwards;transform-origin:50% 50%}
         @keyframes gridPop{0%{transform:scale(1)}32%{transform:scale(1.13);box-shadow:0 0 0 5px rgba(11,153,129,0.45),0 0 34px 9px rgba(11,153,129,0.5),inset 0 0 16px rgba(25,230,189,0.25)}62%{transform:scale(0.99)}100%{transform:scale(1);box-shadow:0 0 9px 1px rgba(11,153,129,0.22)}}
         .animate-pop{animation:gridPop 0.7s cubic-bezier(0.16,1,0.3,1) forwards}
         @keyframes gridTextFall{0%{transform:translate3d(0,0,0) rotate(0deg);opacity:1;filter:blur(0)}14%{transform:translate3d(0,-6px,0) rotate(-3deg)}100%{transform:translate3d(0,46px,0) rotate(14deg);opacity:0;filter:blur(1px)}}
@@ -788,6 +487,7 @@ export default function GridChart({
 
       {/* Chart area */}
       <div ref={containerRef} className="relative flex-1 overflow-hidden select-none">
+        {/* Canvas is owned by the worker after mount — do not set width/height from React */}
         <canvas
           ref={canvasRef}
           style={{ width: w, height: h, display: 'block' }}
@@ -797,53 +497,32 @@ export default function GridChart({
           onPointerLeave={onPointerLeave}
         />
 
-        {/* animation overlay — only the few cells mid-animation */}
+        {/* DOM animation overlay — only cells mid-animation */}
         {overlayCells.map(({ key, text, pop }) => {
           const pos = animFrozenPos.current.get(key);
           if (!pos) return null;
-
-          // Box went live: POP the box in place, fall its text out — box stays.
           if (pop) {
             return (
-              <div
-                key={key}
-                className="absolute flex items-center justify-center pointer-events-none animate-pop overflow-hidden"
-                style={{
-                  left: pos.left, top: pos.top, width: pos.width, height: pos.height,
-                  background: 'rgba(11,153,129,0.16)', border: '1px solid #0b9981', borderRadius: 4,
-                  zIndex: 50,
-                }}
-              >
-                <span
-                  className="animate-text-fall"
-                  style={{ color: '#19e6bd', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}
-                >
+              <div key={key} className="absolute flex items-center justify-center pointer-events-none animate-pop overflow-hidden"
+                style={{ left: pos.left, top: pos.top, width: pos.width, height: pos.height,
+                  background: 'rgba(11,153,129,0.16)', border: '1px solid #0b9981', borderRadius: 4, zIndex: 50 }}>
+                <span className="animate-text-fall"
+                  style={{ color: '#19e6bd', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}>
                   {text}
                 </span>
               </div>
             );
           }
-
-          // Settlement eruption (winning band reveal at end).
           return (
-            <div
-              key={key}
-              className="absolute pointer-events-none animate-win-erupt"
-              style={{
-                left: pos.left, top: pos.top, width: pos.width, height: pos.height,
-                background: 'rgba(11,153,129,0.5)', border: '1px solid #0b9981', borderRadius: 4,
-                zIndex: 30,
-              }}
-            />
+            <div key={key} className="absolute pointer-events-none animate-win-erupt"
+              style={{ left: pos.left, top: pos.top, width: pos.width, height: pos.height,
+                background: 'rgba(11,153,129,0.5)', border: '1px solid #0b9981', borderRadius: 4, zIndex: 30 }} />
           );
         })}
 
-        {/* hover tooltip — always mounted, shown/hidden imperatively to avoid re-renders */}
-        <div
-          ref={tipRef}
-          className="absolute z-20 pointer-events-none rounded-xl border border-white/10 bg-[#0a0c16]/85 backdrop-blur-md px-3.5 py-2 shadow-2xl"
-          style={{ display: 'none' }}
-        >
+        {/* Hover tooltip — always mounted, shown/hidden imperatively */}
+        <div ref={tipRef} className="absolute z-20 pointer-events-none rounded-xl border border-white/10 bg-[#0a0c16]/85 backdrop-blur-md px-3.5 py-2 shadow-2xl"
+          style={{ display: 'none' }}>
           <div ref={tipRangeEl} className="text-[11px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }} />
           <div className="flex items-center gap-3 mt-1.5 text-[10px]" style={{ fontFamily: 'var(--font-mono)' }}>
             <span className="text-text-tertiary flex items-center gap-1">
@@ -853,37 +532,12 @@ export default function GridChart({
             <span ref={tipMultEl} className="text-bullish-green font-bold" />
             <span ref={tipCostEl} className="text-text-secondary" />
           </div>
-          <div ref={tipLockedEl} className="items-center gap-1 mt-1.5 text-[9px] font-semibold uppercase tracking-wider" style={{ color: '#a6a3ff', display: 'none' }}>
+          <div ref={tipLockedEl} className="items-center gap-1 mt-1.5 text-[9px] font-semibold uppercase tracking-wider"
+            style={{ color: '#a6a3ff', display: 'none' }}>
             Live · Betting closed
           </div>
         </div>
       </div>
     </div>
   );
-}
-
-function isCandleStyle(c: ChartStyle) {
-  return c === 'candles' || c === 'heikin';
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-}
-
-// Path2D variant for batched cell rendering (no ctx needed; appends sub-path).
-function pathRoundRect(p: Path2D, x: number, y: number, w: number, h: number, r: number) {
-  const rr = Math.min(r, w / 2, h / 2);
-  p.moveTo(x + rr, y);
-  p.arcTo(x + w, y, x + w, y + h, rr);
-  p.arcTo(x + w, y + h, x, y + h, rr);
-  p.arcTo(x, y + h, x, y, rr);
-  p.arcTo(x, y, x + w, y, rr);
-  p.closePath();
 }
