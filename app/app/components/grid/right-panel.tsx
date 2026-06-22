@@ -211,10 +211,9 @@ export default memo(function RightPanel({
   }, [s.price]);
 
   const focusedLeg = focusedLegKey ? s.legs.get(focusedLegKey) ?? null : null;
-  const tradeSizeValue = focusedLeg ? focusedLeg.cost : s.stake;
+  const tradeSizeValue = s.stake;
   const setTradeSize = (v: number) => {
-    if (focusedLegKey) s.updateLegCost(focusedLegKey, v);
-    else s.setStake(v);
+    s.setStake(v);
   };
 
   const handleBandClick = useCallback((epoch: typeof focusedEpoch, band: (typeof bands)[number]) => {
@@ -247,10 +246,24 @@ export default memo(function RightPanel({
       {/* ── Trade Size ── */}
       <div className="px-4 pt-5 pb-4 border-b border-border-subtle shrink-0">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-[11px] font-semibold uppercase tracking-widest text-text-quaternary">Trade Size</span>
-          {focusedLeg && (
-            <span className="text-[10px] text-text-quaternary" style={{ fontFamily: 'var(--font-mono)' }}>
-              ${focusedLeg.lower}–{focusedLeg.upper}
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-text-quaternary">
+            {focusedLeg ? 'Focused Cell Size' : 'Default Trade Size'}
+          </span>
+          {focusedLeg ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-brand-violet font-semibold" style={{ fontFamily: 'var(--font-mono)' }}>
+                ${focusedLeg.lower}–{focusedLeg.upper}
+              </span>
+              <button
+                onClick={() => setFocusedLegKey(null)}
+                className="text-[10px] text-text-quaternary hover:text-text-secondary transition-colors underline cursor-pointer"
+              >
+                Clear Focus
+              </button>
+            </div>
+          ) : (
+            <span className="text-[10px] text-text-quaternary">
+              Applied to new selections
             </span>
           )}
         </div>
@@ -258,7 +271,8 @@ export default memo(function RightPanel({
           className="flex items-center rounded-[10px] px-4 py-3 gap-2 mb-3"
           style={{
             background: 'var(--color-surface-card)',
-            border: `1px solid ${focusedLeg ? 'rgba(128,125,254,0.4)' : 'var(--color-border-default)'}`,
+            border: `1px solid ${focusedLeg ? 'rgba(128,125,254,0.6)' : 'var(--color-border-default)'}`,
+            boxShadow: focusedLeg ? '0 0 0 1px rgba(128,125,254,0.2)' : 'none',
           }}
         >
           <span className="text-text-quaternary text-[20px] font-light">$</span>
@@ -277,7 +291,7 @@ export default memo(function RightPanel({
             <button
               key={v}
               onClick={() => setTradeSize(v === 'MAX' ? 1000 : Number(v))}
-              className="py-2 rounded-[7px] text-[12px] font-semibold transition-all"
+              className="py-2 rounded-[7px] text-[12px] font-semibold transition-all cursor-pointer hover:bg-white/[0.04]"
               style={{
                 background: v !== 'MAX' && tradeSizeValue === v ? 'rgba(128,125,254,0.2)' : 'var(--color-surface-card)',
                 color: v !== 'MAX' && tradeSizeValue === v ? '#a6a3ff' : 'var(--color-text-tertiary)',
@@ -295,7 +309,7 @@ export default memo(function RightPanel({
         <span className="text-[13px] text-text-secondary">Confirm bets</span>
         <button
           onClick={() => setConfirmBets((v) => !v)}
-          className="relative w-11 h-6 rounded-full transition-colors duration-200"
+          className="relative w-11 h-6 rounded-full transition-colors duration-200 cursor-pointer"
           style={{ background: confirmBets ? '#0b9981' : 'rgba(255,255,255,0.1)' }}
         >
           <span
@@ -304,6 +318,81 @@ export default memo(function RightPanel({
           />
         </button>
       </div>
+
+      {/* ── Selected Cells ── */}
+      {s.legsArr.length > 0 && (
+        <div className="border-b border-border-subtle shrink-0 flex flex-col max-h-56">
+          <div className="flex items-center justify-between px-4 py-2 bg-white/[0.01]">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-text-quaternary">Selected Cells</span>
+            <span className="text-[10px] text-text-quaternary" style={{ fontFamily: 'var(--font-mono)' }}>
+              {s.legsArr.length} selected
+            </span>
+          </div>
+          <div className="overflow-y-auto no-scrollbar px-4 py-2 flex flex-col gap-2">
+            {s.legsArr.map((leg) => {
+              const key = leg.key;
+              const isFocused = focusedLegKey === key;
+              const epoch = s.epochs.find((e) => e.id === leg.epochId);
+              const timeStr = epoch ? fmtTime(epoch.start) : '';
+              return (
+                <div
+                  key={key}
+                  onClick={() => setFocusedLegKey(key)}
+                  className="flex items-center justify-between p-2 rounded-[8px] border transition-all cursor-pointer hover:bg-white/[0.02]"
+                  style={{
+                    background: isFocused ? 'rgba(128,125,254,0.08)' : 'var(--color-surface-card)',
+                    borderColor: isFocused ? '#807dfe' : 'var(--color-border-subtle)',
+                  }}
+                >
+                  <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[12px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
+                        ${leg.lower}–${leg.upper}
+                      </span>
+                      <span className="text-[10px] text-text-quaternary bg-white/[0.04] px-1 rounded">
+                        {timeStr}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-text-quaternary flex items-center gap-2">
+                      <span style={{ color: '#0b9981' }}>{leg.multiplier.toFixed(2)}x</span>
+                      <span>Prob: {((1 - 0.06) / leg.multiplier * 100).toFixed(0)}%</span>
+                    </div>
+                  </div>
+                  
+                  {/* Price input field for this specific cell */}
+                  <div className="flex items-center bg-black/20 border border-border-subtle rounded-[6px] px-2 py-1 gap-1 w-20 shrink-0 mr-2" onClick={e => e.stopPropagation()}>
+                    <span className="text-text-quaternary text-[11px]">$</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={leg.cost}
+                      onChange={(e) => {
+                        const val = Math.max(0, parseFloat(e.target.value) || 0);
+                        s.updateLegCost(key, val);
+                      }}
+                      className="flex-1 bg-transparent text-[12px] font-bold text-text-primary outline-none w-0 text-right"
+                      style={{ fontFamily: 'var(--font-mono)' }}
+                    />
+                  </div>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      s.removeLeg(key);
+                      if (focusedLegKey === key) setFocusedLegKey(null);
+                    }}
+                    className="p-1 rounded hover:bg-white/10 text-text-quaternary hover:text-red-500 transition-colors cursor-pointer"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Bands ── */}
       {focusedEpoch && (

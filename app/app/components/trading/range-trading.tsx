@@ -2,6 +2,11 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { IconPlus } from '@tabler/icons-react'
 import { useComboDispatch } from '../market/combo-context'
+import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClientQuery } from '@mysten/dapp-kit'
+import { useQuery } from '@tanstack/react-query'
+import { getChartOracle, getLatestPrice } from '../../lib/predict-api'
+import { toast } from '../toast/toast-context'
+import { CERIDA_PKG, VAULT_ID, QUOTE_COIN_TYPE, toChainPrice, toChainDusdc } from '../../lib/contracts'
 
 // ── On-chain mapping ────────────────────────────────────────────────────────────
 // A range bet is predict::mint_range over RangeKey(oracle_id, expiry,
@@ -73,35 +78,60 @@ interface Band {
 interface Props {
   currentPrice?: number
   oracleId?: string
-  // Expiry is a property of the selected oracle (from GET /oracles), not a user
-  // choice. Defaults to ~1h out for the standalone demo.
+  // Expiry is a property of the selected oracle (from GET /oracles), not a user choice.
   oracleExpiry?: number
   underlying?: string
-  onSubmit?: (params: {
-    oracleId: string; expiry: number
-    lower: number; higher: number; qty: number; maxCost: number
-  }) => void
 }
 
 export default function RangeTrading({
-  currentPrice = 66612, // BTC spot from /oracles state (demo default)
-  oracleId = '',
-  oracleExpiry,
+  currentPrice: currentPriceProp,
+  oracleId: oracleIdProp,
+  oracleExpiry: oracleExpiryProp,
   underlying = 'BTC',
-  onSubmit,
 }: Props) {
   const { addLeg } = useComboDispatch()
+  const account = useCurrentAccount()
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+
+  // Real oracle data — falls back to props if provided, otherwise fetches
+  const { data: oracle } = useQuery({
+    queryKey: ['range-oracle'],
+    queryFn: getChartOracle,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    enabled: !oracleIdProp,
+  })
+  const resolvedOracleId = oracleIdProp ?? oracle?.oracle_id ?? ''
+  const resolvedExpiry = oracleExpiryProp ?? oracle?.expiry ?? Date.now() + 3600_000
+
+  const { data: priceData } = useQuery({
+    queryKey: ['range-price', resolvedOracleId],
+    queryFn: () => getLatestPrice(resolvedOracleId),
+    enabled: !!resolvedOracleId,
+    refetchInterval: 5_000,
+  })
+  const livePrice = priceData?.spot ?? currentPriceProp ?? 66_612
+
+  // dUSDC balance
+  const { data: coinData } = useSuiClientQuery(
+    'getCoins',
+    { owner: account?.address ?? '', coinType: QUOTE_COIN_TYPE },
+    { enabled: !!account },
+  )
+  const balance = coinData?.data
+    ? coinData.data.reduce((s, c) => s + Number(c.balance), 0) / 1e6
+    : 0
   // The oracle's expiry timestamp (fixed by the market, not chosen here).
-  const expiry = useMemo(() => oracleExpiry ?? Date.now() + 60 * 60_000, [oracleExpiry])
+  const expiry = useMemo(() => resolvedExpiry, [resolvedExpiry])
   // Display strike step scaled to the asset's price magnitude (BTC ~$66k → $250).
-  const STRIKE_STEP = useMemo(() => niceStep(currentPrice), [currentPrice])
+  const STRIKE_STEP = useMemo(() => niceStep(livePrice), [livePrice])
   // Visible strike count — scroll the bar to zoom the range in/out.
   const [numBands, setNumBands] = useState(NUM_BANDS)
   // Strike ladder around the current price (snapped to the display grid).
   const strikes = useMemo(() => {
-    const base = Math.round(currentPrice / STRIKE_STEP) * STRIKE_STEP - (numBands / 2) * STRIKE_STEP
+    const base = Math.round(livePrice / STRIKE_STEP) * STRIKE_STEP - (numBands / 2) * STRIKE_STEP
     return Array.from({ length: numBands + 1 }, (_, i) => base + i * STRIKE_STEP)
-  }, [currentPrice, STRIKE_STEP, numBands])
+  }, [livePrice, STRIKE_STEP, numBands])
   const bands = useMemo<Band[]>(
     () => strikes.slice(0, -1).map((lo, i) => ({ idx: i, lower: lo, upper: strikes[i + 1]! })),
     [strikes],
@@ -110,19 +140,13 @@ export default function RangeTrading({
   const domainHi = strikes[strikes.length - 1]!
   const span = domainHi - domainLo
 
-  // Live price — gentle mean-reverting walk inside the ladder.
-  const [price, setPrice] = useState(currentPrice)
+  // Real price (polled) drives the position marker; clock for expiry countdown.
+  const price = Math.max(domainLo + 0.5, Math.min(domainHi - 0.5, livePrice))
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const id = setInterval(() => {
-      setPrice((p) => {
-        const next = p + (currentPrice - p) * 0.05 + (Math.random() - 0.5) * STRIKE_STEP * 0.5
-        return Math.max(domainLo + 0.5, Math.min(domainHi - 0.5, next))
-      })
-      setNow(Date.now())
-    }, 700)
+    const id = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(id)
-  }, [currentPrice, domainLo, domainHi, STRIKE_STEP])
+  }, [])
 
   // σ from the oracle's actual time-to-expiry.
   const secsToExpiry = Math.max(1, (expiry - now) / 1000)
@@ -130,7 +154,7 @@ export default function RangeTrading({
   const mmss = `${Math.floor(secsToExpiry / 3600) > 0 ? Math.floor(secsToExpiry / 3600) + 'h ' : ''}${Math.floor((secsToExpiry % 3600) / 60)}m ${Math.floor(secsToExpiry % 60)}s`
 
   // Selection stored as price bounds (not band indices) so it survives zoom.
-  const snap0 = Math.round(currentPrice / STRIKE_STEP) * STRIKE_STEP
+  const snap0 = Math.round(livePrice / STRIKE_STEP) * STRIKE_STEP
   const [selLo, setSelLo] = useState(snap0)
   const [selHi, setSelHi] = useState(snap0 + STRIKE_STEP)
   const dragging = useRef(false)
@@ -217,16 +241,98 @@ export default function RangeTrading({
   const multiple = amount > 0 ? maxPayout / amount : 0 // 1 / ask
   const canSubmit = amount > 0 && qtyNum > 0 && lower < higher
 
-  function handleSubmit() {
-    if (!canSubmit || !onSubmit) return
-    onSubmit({
-      oracleId,
-      expiry,
-      lower: toChainPrice(lower),
-      higher: toChainPrice(higher),
-      qty: Math.floor(qtyNum), // integer mint_range quantity
-      maxCost: toChainDusdc(amount), // you never pay more than your stake
-    })
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleSubmit() {
+    if (!canSubmit) return
+    if (!account) {
+      toast.warning('Connect wallet', 'Connect your wallet to trade.')
+      return
+    }
+    if (!resolvedOracleId) {
+      toast.error('No active market', 'Could not find an active oracle.')
+      return
+    }
+
+    setSubmitting(true)
+    const label = `$${fmtStrike(lower)}–$${fmtStrike(higher)}`
+    const id = toast.progress('Mint Range', 20, `Signing ${label}…`)
+
+    try {
+      const { Transaction } = await import('@mysten/sui/transactions')
+      const tx = new Transaction()
+      tx.setGasBudget(10_000_000)
+
+      const escrow = toChainDusdc(amount)
+      const [pay] = tx.splitCoins(tx.gas, [tx.pure.u64(escrow)])
+
+      // Use dUSDC coin from wallet if available
+      if (coinData?.data?.length) {
+        const coins = [...coinData.data].sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)))
+        const [pay2] = tx.splitCoins(tx.object(coins[0]!.coinObjectId), [tx.pure.u64(escrow)])
+        tx.moveCall({
+          target: `${CERIDA_PKG}::vault::request_mint_range`,
+          typeArguments: [QUOTE_COIN_TYPE],
+          arguments: [
+            tx.object(VAULT_ID),
+            tx.pure.id(resolvedOracleId),
+            tx.pure.u64(BigInt(expiry)),
+            tx.pure.u64(toChainPrice(lower)),
+            tx.pure.u64(toChainPrice(higher)),
+            tx.pure.u64(BigInt(Math.floor(qtyNum * 1e6))),
+            tx.pure.u64(0n), // max_cost=0 → market order
+            tx.pure.u64(0n), // tp_value=0
+            tx.pure.u64(0n), // sl_value=0
+            pay2,
+          ],
+        })
+      } else {
+        tx.moveCall({
+          target: `${CERIDA_PKG}::vault::request_mint_range`,
+          typeArguments: [QUOTE_COIN_TYPE],
+          arguments: [
+            tx.object(VAULT_ID),
+            tx.pure.id(resolvedOracleId),
+            tx.pure.u64(BigInt(expiry)),
+            tx.pure.u64(toChainPrice(lower)),
+            tx.pure.u64(toChainPrice(higher)),
+            tx.pure.u64(BigInt(Math.floor(qtyNum * 1e6))),
+            tx.pure.u64(0n),
+            tx.pure.u64(0n),
+            tx.pure.u64(0n),
+            pay,
+          ],
+        })
+      }
+
+      toast.update(id, { progress: 60, description: 'Broadcasting…' })
+
+      await new Promise<void>((resolve, reject) => {
+        signAndExecute(
+          { transaction: tx as Parameters<typeof signAndExecute>[0]['transaction'] },
+          { onSuccess: () => resolve(), onError: (e) => reject(e) },
+        )
+      })
+
+      toast.update(id, {
+        type: 'success',
+        title: 'Range minted',
+        description: `${label} · $${amount.toFixed(2)} · ${(winProb * 100).toFixed(0)}% win prob`,
+        progress: undefined,
+        duration: 5000,
+      })
+      setAmount('25')
+    } catch (err) {
+      toast.update(id, {
+        type: 'error',
+        title: 'Mint failed',
+        description: err instanceof Error ? err.message : String(err),
+        progress: undefined,
+        duration: null,
+      })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const pctOf = (p: number) => ((p - domainLo) / span) * 100
@@ -439,16 +545,16 @@ export default function RangeTrading({
 
         {/* Submit + Add to Combo */}
         <button
-          disabled={!canSubmit}
+          disabled={!canSubmit || submitting}
           onClick={handleSubmit}
-          className="mt-auto w-full py-2 text-[12px] font-semibold rounded-[7px] transition-opacity shrink-0"
+          className="mt-auto w-full py-2 text-[12px] font-semibold rounded-[7px] transition-opacity shrink-0 disabled:opacity-50"
           style={{
             backgroundColor: canSubmit ? 'var(--color-brand-violet)' : 'var(--color-surface-hover)',
             color: canSubmit ? '#fff' : 'var(--color-text-quaternary)',
-            cursor: canSubmit ? 'pointer' : 'not-allowed',
+            cursor: canSubmit && !submitting ? 'pointer' : 'not-allowed',
           }}
         >
-          Mint Range · ${fmtStrike(lower)}–${fmtStrike(higher)}
+          {submitting ? 'Signing…' : `Mint Range · $${fmtStrike(lower)}–$${fmtStrike(higher)}`}
         </button>
         <button
           disabled={!canSubmit}

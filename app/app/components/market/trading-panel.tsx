@@ -6,9 +6,14 @@ import {
   animate,
 } from 'framer-motion';
 import { IconChevronDown, IconPlus } from '@tabler/icons-react';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClientQuery, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
+import { useQuery } from '@tanstack/react-query';
 import OnboardingModal from '../onboarding-modal';
 import { useComboDispatch } from './combo-context';
+import { useLevels } from './levels-context';
+import { toast } from '../toast/toast-context';
+import { getSurface, getActiveLadder } from '../../lib/cerida-api';
+import { CERIDA_PKG, VAULT_ID, toChainPrice, toChainDusdc } from '../../lib/contracts';
 
 const BASE_EDGE = 0.06;
 
@@ -16,7 +21,7 @@ const MIN_LEV = 1,
   MAX_LEV = 50,
   STEPS = MAX_LEV - MIN_LEV;
 const LABEL_MARKS = [1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
-const barH = (step: number) => 5 + (step / STEPS) * 27; // 5px → 32px
+const barH = (step: number) => 5 + (step / STEPS) * 27;
 
 function LeverageSlider({
   value,
@@ -81,7 +86,6 @@ function LeverageSlider({
     window.addEventListener('pointerup', onUp);
   };
 
-  // Major bars sit at each LABEL_MARK position
   const majors = LABEL_MARKS.map((mark, i) => ({
     pos: (mark - MIN_LEV) / STEPS,
     h: barH(mark - MIN_LEV),
@@ -89,7 +93,6 @@ function LeverageSlider({
     step: i,
   }));
 
-  // 3 minor bars evenly spaced between each pair of major bars
   const minors: { pos: number; h: number }[] = [];
   for (let i = 0; i < LABEL_MARKS.length - 1; i++) {
     const aStep = (LABEL_MARKS[i] ?? MIN_LEV) - MIN_LEV;
@@ -141,9 +144,7 @@ function LeverageSlider({
           springTo(xToLev(e.clientX - rect.left));
         }}
       >
-        {/* Bar + tick zone */}
         <div style={{ position: 'absolute', inset: '0 0 18px 0' }}>
-          {/* Major bars */}
           {majors.map(({ pos, h, active }, i) => (
             <div
               key={`mj${i}`}
@@ -161,7 +162,6 @@ function LeverageSlider({
             />
           ))}
 
-          {/* Minor bars */}
           {minors.map(({ pos, h }, i) => (
             <div
               key={`mn${i}`}
@@ -179,7 +179,6 @@ function LeverageSlider({
             />
           ))}
 
-          {/* Major ticks */}
           {majors.map(({ pos, active }, i) => (
             <div
               key={`tmj${i}`}
@@ -197,7 +196,6 @@ function LeverageSlider({
             />
           ))}
 
-          {/* Minor ticks */}
           {minors.map(({ pos }, i) => (
             <div
               key={`tmn${i}`}
@@ -215,7 +213,6 @@ function LeverageSlider({
             />
           ))}
 
-          {/* Draggable thumb */}
           <motion.div
             onPointerDown={handleThumbDown}
             style={{
@@ -244,7 +241,6 @@ function LeverageSlider({
             />
           </motion.div>
 
-          {/* Drag handle grip — appears on drag */}
           <AnimatePresence>
             {showHandle && (
               <motion.div
@@ -303,7 +299,6 @@ function LeverageSlider({
           </AnimatePresence>
         </div>
 
-        {/* Snap labels */}
         <div
           style={{
             position: 'absolute',
@@ -345,6 +340,42 @@ function LeverageSlider({
   );
 }
 
+// ── Small price input ──────────────────────────────────────────────────────────
+
+function PriceInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  color?: string
+  placeholder: string
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] text-text-tertiary">
+        {label}
+      </span>
+      <input
+        type="number"
+        value={value}
+        placeholder={placeholder}
+        step="0.1"
+        min="0.1"
+        max="99.9"
+        onChange={e => onChange(e.target.value)}
+        className="w-full bg-transparent text-[13px] text-text-primary placeholder:text-text-quaternary outline-none border-b border-border-subtle focus:border-border-default pb-1"
+        style={{ fontFamily: 'var(--font-mono)' }}
+      />
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
 interface TradingPanelProps {
   oracle_id?: string
   asset?: string
@@ -356,26 +387,199 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
   const account = useCurrentAccount();
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [direction, setDirection] = useState<'buy' | 'sell'>('buy');
-  const [orderType, setOrderType] = useState<'market' | 'limit' | 'pro'>(
-    'market',
-  );
+  const [orderType, setOrderType] = useState<'market' | 'limit' | 'pro'>('market');
   const [pctSelected, setPctSelected] = useState<number | null>(null);
   const [takeProfitEnabled, setTakeProfitEnabled] = useState(false);
   const [leverage, setLeverage] = useState(1);
+  const [amount, setAmount] = useState('');
+  const [limitPrice, setLimitPrice] = useState('');
+  const [tpInput, setTpInput] = useState('');
+  const [slInput, setSlInput] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
   const { addLeg } = useComboDispatch();
+  const levels = useLevels();
+
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction();
 
   const isLeverage = leverage > 1;
   const buyLabel = isLeverage ? 'LONG' : 'BUY';
   const sellLabel = isLeverage ? 'SHORT' : 'SELL';
-  // Placeholder cents — wire to live surface data when available
-  const buyCents = 46;
-  const sellCents = 54;
+  const actionLabel = direction === 'buy' ? buyLabel : sellLabel;
+
+  // Fetch active ladder to find oracle if not passed in
+  const { data: ladder } = useQuery({
+    queryKey: ['activeLadder'],
+    queryFn: getActiveLadder,
+    staleTime: 30_000,
+  });
+  const effectiveOracleId = oracle_id ?? ladder?.[0]?.oracleId;
+
+  // Live YES/NO prices from surface
+  const { data: surface } = useQuery({
+    queryKey: ['surface', effectiveOracleId],
+    queryFn: () => getSurface(effectiveOracleId!),
+    enabled: !!effectiveOracleId,
+    refetchInterval: 4_000,
+  });
+
+  // Match surface row to the selected strike
+  const strikeNum = strike !== undefined ? Number(strike) : undefined;
+  const surfaceRow = surface?.length
+    ? strikeNum !== undefined
+      ? surface.reduce((best, row) =>
+          Math.abs(row.strike - strikeNum) < Math.abs(best.strike - strikeNum) ? row : best,
+          surface[0]!)
+      : surface[0]!
+    : null;
+
+  const buyCents  = surfaceRow?.yes ?? null;
+  const sellCents = surfaceRow?.no  ?? null;
+
+  // dUSDC balance (6 decimals). Type comes from env; falls back to the localnet default.
+  const quoteCoinType =
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_QUOTE_COIN_TYPE as string) ||
+    '0x89506beb89764ee41b6df5b3a8f5b77266e2e034df13b68e8eab0ff101a79aac::dusdc::DUSDC';
+
+  const { data: coinData } = useSuiClientQuery(
+    'getCoins',
+    { owner: account?.address ?? '', coinType: quoteCoinType },
+    { enabled: !!account },
+  );
+  const usdcBalance = coinData?.data
+    ? coinData.data.reduce((s, c) => s + BigInt(c.balance), 0n)
+    : null;
+  const balanceDisplay = usdcBalance !== null
+    ? `$${(Number(usdcBalance) / 1e6).toFixed(2)}`
+    : '—';
+
+  // Clear levels when TP/SL toggled off
+  useEffect(() => {
+    if (!takeProfitEnabled) {
+      levels.setTp(null);
+      levels.setSl(null);
+      setTpInput('');
+      setSlInput('');
+    }
+  }, [takeProfitEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleTpChange = (v: string) => {
+    setTpInput(v);
+    const n = parseFloat(v);
+    levels.setTp(isNaN(n) ? null : +Math.max(0.1, Math.min(99.9, n)).toFixed(1));
+  };
+  const handleSlChange = (v: string) => {
+    setSlInput(v);
+    const n = parseFloat(v);
+    levels.setSl(isNaN(n) ? null : +Math.max(0.1, Math.min(99.9, n)).toFixed(1));
+  };
 
   const pctOptions = [10, 25, 50, 75];
 
+  const handleSubmit = async () => {
+    if (!account) { setOnboardingOpen(true); return; }
+    if (!effectiveOracleId) {
+      toast.error('No active market', 'Could not find an active oracle.');
+      return;
+    }
+    const amtNum = parseFloat(amount);
+    if (!amount || isNaN(amtNum) || amtNum <= 0) {
+      toast.warning('Enter an amount', 'Specify how much you want to trade.');
+      return;
+    }
+
+    setSubmitting(true);
+    const id = toast.progress(
+      `${actionLabel} order`,
+      20,
+      `Signing ${direction === 'buy' ? 'YES' : 'NO'} for $${amtNum.toFixed(2)}…`,
+    );
+
+    try {
+      const { Transaction } = await import('@mysten/sui/transactions');
+      const tx = new Transaction();
+      tx.setGasBudget(10_000_000);
+
+      // Find the ladder entry matching the selected strike for oracle_id + expiry
+      const ladderEntry = ladder?.find(m => !strikeNum || Math.abs(m.strike - (strikeNum / 1e9)) < 500)
+        ?? ladder?.[0];
+      const oracleObjId = ladderEntry?.oracleId ?? effectiveOracleId!;
+      const expiryMs = ladderEntry?.expiry ?? (Date.now() + 3600_000);
+      const strikeVal = strikeNum ?? (surfaceRow?.strike ? Math.round(surfaceRow.strike * 1e9) : 63_000 * 1e9);
+      const isUp = direction === 'buy'; // YES = up (price ≥ strike)
+      const escrow = toChainDusdc(amtNum * leverage);
+      const qty = BigInt(Math.round(amtNum * leverage * 1e6));
+
+      // TP/SL in bid·qty units (mark value threshold for keeper-triggered early exit)
+      const tpVal = takeProfitEnabled && tpInput
+        ? BigInt(Math.round((parseFloat(tpInput) / 100) * Number(qty)))
+        : 0n;
+      const slVal = takeProfitEnabled && slInput
+        ? BigInt(Math.round((parseFloat(slInput) / 100) * Number(qty)))
+        : 0n;
+
+      if (coinData?.data?.length) {
+        const sorted = [...coinData.data].sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)));
+        const [pay] = tx.splitCoins(tx.object(sorted[0]!.coinObjectId), [tx.pure.u64(escrow)]);
+        tx.moveCall({
+          target: `${CERIDA_PKG}::vault::request_mint_binary`,
+          typeArguments: [quoteCoinType],
+          arguments: [
+            tx.object(VAULT_ID),
+            tx.pure.id(oracleObjId),
+            tx.pure.u64(BigInt(expiryMs)),
+            tx.pure.u64(BigInt(Math.round(strikeVal))),
+            tx.pure.bool(isUp),
+            tx.pure.u64(qty),
+            tx.pure.u64(0n), // max_cost=0 → market order
+            tx.pure.u64(tpVal),
+            tx.pure.u64(slVal),
+            pay,
+          ],
+        });
+      }
+
+      toast.update(id, { progress: 60, description: 'Broadcasting…' });
+
+      await new Promise<void>((resolve, reject) => {
+        signAndExecute(
+          { transaction: tx as Parameters<typeof signAndExecute>[0]['transaction'] },
+          {
+            onSuccess: () => resolve(),
+            onError: (e) => reject(e),
+          },
+        );
+      });
+
+      toast.update(id, {
+        type: 'success',
+        title: `${actionLabel} confirmed`,
+        description: `$${amtNum.toFixed(2)} ${direction === 'buy' ? 'YES' : 'NO'} @ ${direction === 'buy' ? buyCents?.toFixed(1) : sellCents?.toFixed(1)}¢`,
+        progress: undefined,
+        duration: 5000,
+      });
+
+      const entryPrice = direction === 'buy' ? buyCents : sellCents;
+      if (entryPrice !== null) levels.setEntry(entryPrice);
+
+      setAmount('');
+      setPctSelected(null);
+    } catch (err) {
+      toast.update(id, {
+        type: 'error',
+        title: 'Order failed',
+        description: err instanceof Error ? err.message : String(err),
+        progress: undefined,
+        duration: null,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col bg-surface-primary h-full min-w-0">
-      {/* BUY / SELL (→ LONG / SHORT when leveraged) */}
+      {/* BUY / SELL → LONG / SHORT when leveraged */}
       <div className="flex border-b border-border-subtle shrink-0">
         <button
           onClick={() => setDirection('buy')}
@@ -387,7 +591,7 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
         >
           <span className="text-[15px] font-bold tracking-wide">{buyLabel}</span>
           <span className={`text-[13px] font-medium tabular-nums ${direction === 'buy' ? 'text-bullish-green/70' : 'text-text-quaternary'}`}>
-            {buyCents}¢
+            {buyCents !== null ? `${buyCents.toFixed(1)}¢` : '—'}
           </span>
         </button>
         <button
@@ -400,7 +604,7 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
         >
           <span className="text-[15px] font-bold tracking-wide">{sellLabel}</span>
           <span className={`text-[13px] font-medium tabular-nums ${direction === 'sell' ? 'text-bearish-red/70' : 'text-text-quaternary'}`}>
-            {sellCents}¢
+            {sellCents !== null ? `${sellCents.toFixed(1)}¢` : '—'}
           </span>
         </button>
       </div>
@@ -419,7 +623,7 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
           >
             {type.charAt(0).toUpperCase() + type.slice(1)}
             {type === 'limit' && (
-              <span className="px-1 py-0.5 text-[10px] font-semibold bg-brand-violet/20 text-brand-violet rounded-[3px] leading-none">
+              <span className="px-1.5 py-0.5 text-[9px] font-bold text-brand-violet border-[1.5px] border-brand-violet/40 rounded-[6px] uppercase tracking-wider leading-none">
                 NEW
               </span>
             )}
@@ -435,32 +639,57 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
       </div>
 
       <div className="flex flex-col gap-2 px-3 py-2 flex-1 overflow-hidden">
-        {/* Margin row */}
+        {/* Margin / Balance row */}
         <div className="flex items-center justify-between">
           <span className="text-[13px] text-text-secondary">Margin</span>
           <span className="text-[13px] text-text-tertiary">
             Bal.{' '}
-            <span
-              className="text-text-secondary"
-              style={{ fontFamily: 'var(--font-mono)' }}
-            >
-              $8
+            <span className="text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>
+              {balanceDisplay}
             </span>
           </span>
         </div>
 
         {/* Amount input */}
         <div className="flex items-center bg-surface-primary rounded-[8px] px-3 py-1.5 border border-border-subtle gap-2">
-          <span
-            className="text-[20px] font-medium text-text-primary tracking-tight"
+          <input
+            type="number"
+            value={amount}
+            onChange={e => { setAmount(e.target.value); setPctSelected(null); }}
+            placeholder="0.00"
+            min="0"
+            step="1"
+            className="flex-1 min-w-0 bg-transparent text-[20px] font-medium text-text-primary tracking-tight outline-none placeholder:text-text-quaternary"
             style={{ fontFamily: 'var(--font-mono)', letterSpacing: '-0.3px' }}
-          >
-            $0<span className="text-text-tertiary">.00</span>
-          </span>
-          <span className="ml-auto flex items-center justify-center px-2 py-0.5 rounded-[3px] text-[13px] font-semibold bg-brand-violet/20 text-brand-violet border border-brand-violet/30">
+          />
+          <span className="ml-auto flex items-center justify-center px-2.5 py-0.5 rounded-[4px] text-[12px] font-bold bg-surface-card text-text-primary border border-border-subtle leading-none shrink-0">
             {leverage}X
           </span>
         </div>
+
+        {/* Limit price — only when limit tab active */}
+        {orderType === 'limit' && (
+          <div className="flex items-center bg-surface-primary rounded-[8px] px-3 py-1.5 border border-border-subtle gap-2">
+            <span className="text-[11px] text-text-tertiary uppercase tracking-widest shrink-0">
+              Limit ¢
+            </span>
+            <input
+              type="number"
+              value={limitPrice}
+              onChange={e => setLimitPrice(e.target.value)}
+              placeholder={
+                direction === 'buy'
+                  ? (buyCents?.toFixed(1) ?? '50.0')
+                  : (sellCents?.toFixed(1) ?? '50.0')
+              }
+              min="0.1"
+              max="99.9"
+              step="0.1"
+              className="flex-1 min-w-0 bg-transparent text-[14px] font-medium text-text-primary outline-none placeholder:text-text-quaternary text-right"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+        )}
 
         {/* Percentage buttons */}
         <div className="flex items-center gap-1.5">
@@ -492,7 +721,7 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
         {/* Leverage slider */}
         <LeverageSlider value={leverage} onChange={setLeverage} />
 
-        {/* Take profit / Stop loss */}
+        {/* Take profit / Stop loss toggle */}
         <div className="flex items-center justify-between">
           <span className="text-[13px] text-text-secondary">
             Take profit / Stop loss
@@ -502,26 +731,68 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
             aria-pressed={takeProfitEnabled}
             className={`h-5 w-9 rounded-pill border p-0.5 transition-colors ${
               takeProfitEnabled
-                ? 'border-brand-violet bg-brand-violet/20'
+                ? 'border-brand-violet bg-brand-violet'
                 : 'border-border-default bg-surface-card'
             }`}
           >
             <span
-              className={`block h-3.5 w-3.5 rounded-pill transition-transform ${
-                takeProfitEnabled
-                  ? 'translate-x-4 bg-brand-violet'
-                  : 'translate-x-0 bg-text-quaternary'
+              className={`block h-3.5 w-3.5 rounded-pill transition-transform bg-white ${
+                takeProfitEnabled ? 'translate-x-4' : 'translate-x-0'
               }`}
             />
           </button>
         </div>
+
+        {/* TP/SL price inputs — animated expand */}
+        <AnimatePresence>
+          {takeProfitEnabled && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              className="overflow-hidden"
+            >
+              <div className="flex gap-4 pt-1">
+                <div className="flex-1">
+                  <PriceInput
+                    label="Take Profit ¢"
+                    value={tpInput}
+                    onChange={handleTpChange}
+                    placeholder={
+                      buyCents !== null ? (buyCents * 1.25).toFixed(1) : '—'
+                    }
+                  />
+                </div>
+                <div className="flex-1">
+                  <PriceInput
+                    label="Stop Loss ¢"
+                    value={slInput}
+                    onChange={handleSlChange}
+                    placeholder={
+                      buyCents !== null ? (buyCents * 0.75).toFixed(1) : '—'
+                    }
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Sign in CTA + Add to Combo */}
+      {/* Action + Combo */}
       <div className="px-3 pb-3 flex flex-col gap-1.5 shrink-0">
         {account ? (
-          <button className="w-full py-2.5 bg-bullish-green text-[#1a1a1a] text-[13px] font-semibold rounded-[8px] hover:opacity-90 transition-opacity">
-            {direction === 'buy' ? buyLabel : sellLabel}
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className={`w-full py-2.5 text-[13px] font-semibold rounded-[8px] transition-opacity disabled:opacity-50 ${
+              direction === 'buy'
+                ? 'bg-bullish-green text-[#1a1a1a] hover:opacity-90'
+                : 'bg-bearish-red text-white hover:opacity-90'
+            }`}
+          >
+            {submitting ? 'Signing…' : actionLabel}
           </button>
         ) : (
           <button
@@ -536,19 +807,17 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
             id:         `trade-${direction}-${strike ?? 0}`,
             label:      `${direction === 'buy' ? 'YES' : 'NO'} ${asset}/USD`,
             direction:  direction === 'buy' ? 'yes' : 'no',
-            prob:       direction === 'buy' ? buyCents / 100 : (100 - buyCents) / 100,
-            multiplier: (1 - BASE_EDGE) / (direction === 'buy' ? buyCents / 100 : (100 - buyCents) / 100),
+            prob:       direction === 'buy'
+              ? (buyCents ?? 50) / 100
+              : (sellCents ?? 50) / 100,
+            multiplier: (1 - BASE_EDGE) /
+              ((direction === 'buy' ? (buyCents ?? 50) : (sellCents ?? 50)) / 100),
             oracle_id,
             asset,
             expiry,
             strike,
           })}
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium rounded-[7px] transition-colors"
-          style={{
-            background: 'rgba(128,125,254,0.08)',
-            color:      '#807dfe',
-            border:     '1px solid rgba(128,125,254,0.2)',
-          }}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-semibold rounded-[7px] transition-all bg-surface-card text-text-secondary border border-border-subtle hover:border-brand-violet hover:text-brand-violet hover:bg-brand-violet/5 cursor-pointer"
         >
           <IconPlus size={11} stroke={2.5} />
           Add to Combo

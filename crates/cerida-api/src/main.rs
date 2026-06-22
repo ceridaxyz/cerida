@@ -3,6 +3,7 @@ use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use cerida_core::combo;
 use cerida_core::config::Config;
 use cerida_core::db;
 use futures_util::{SinkExt, StreamExt};
@@ -44,6 +45,13 @@ struct PositionsQuery {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CombosQuery {
+    owner: Option<String>,
+    status: Option<String>,
+    limit: Option<i64>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -66,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/markets/{oracle_id}/surface", get(surface))
         .route("/flow", get(flow))
         .route("/vaults/{vault_id}/intents", get(vault_intents))
+        .route("/vaults/{vault_id}/combos", get(vault_combos))
+        .route("/vaults/{vault_id}/combos/{combo_id}", get(vault_combo))
         .route("/keeper/jobs", get(keeper_jobs))
         .route("/positions", get(positions))
         .route("/ws", get(ws))
@@ -203,6 +213,43 @@ async fn vault_intents(
     .await
     .unwrap_or_default();
     Json(Value::Array(rows.into_iter().map(row_to_json).collect()))
+}
+
+async fn vault_combos(
+    State(state): State<AppState>,
+    axum::extract::Path(vault_id): axum::extract::Path<String>,
+    Query(query): Query<CombosQuery>,
+) -> Json<Value> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    match combo::list_combos(
+        &state.pool,
+        &vault_id,
+        query.owner.as_deref(),
+        query.status.as_deref(),
+        limit,
+    )
+    .await
+    {
+        Ok(rows) => Json(serde_json::to_value(rows).unwrap_or(Value::Array(vec![]))),
+        Err(e) => {
+            warn!(?e, "vault_combos query failed");
+            Json(Value::Array(vec![]))
+        }
+    }
+}
+
+async fn vault_combo(
+    State(state): State<AppState>,
+    axum::extract::Path((vault_id, combo_id)): axum::extract::Path<(String, i64)>,
+) -> Json<Value> {
+    match combo::get_combo(&state.pool, &vault_id, combo_id).await {
+        Ok(Some(c)) => Json(serde_json::to_value(c).unwrap_or(Value::Null)),
+        Ok(None) => Json(Value::Null),
+        Err(e) => {
+            warn!(?e, "vault_combo query failed");
+            Json(Value::Null)
+        }
+    }
 }
 
 async fn keeper_jobs(

@@ -93,6 +93,7 @@ export interface GridState {
   addLeg: (epoch: Epoch, band: Band) => void;
   removeLeg: (key: string) => void;
   updateLegCost: (key: string, cost: number) => void;
+  updateAllLegCosts: (cost: number) => void;
   clearLegs: () => void;
   legsArr: Leg[];
   payoffPoints: PayoffPoint[];
@@ -232,6 +233,16 @@ export function useGridState(): GridState {
     });
   }, []);
 
+  const updateAllLegCosts = useCallback((cost: number) => {
+    setLegs((prev) => {
+      if (prev.size === 0) return prev;
+      const safeC = Math.max(0, cost);
+      const next = new Map(prev);
+      for (const [k, leg] of prev) next.set(k, { ...leg, cost: safeC });
+      return next;
+    });
+  }, []);
+
   // ── Cell derivation ─────────────────────────────────────────────────────────
   // Keep a live price ref so cellFor reflects the latest tick without
   // re-creating the callback every frame.
@@ -334,6 +345,7 @@ export function useGridState(): GridState {
     addLeg,
     removeLeg,
     updateLegCost,
+    updateAllLegCosts,
     clearLegs,
     legsArr,
     payoffPoints,

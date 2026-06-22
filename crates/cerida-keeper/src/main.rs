@@ -25,13 +25,20 @@ async fn main() -> Result<()> {
     let redis = redis::Client::open(cfg.redis_url.clone())?;
 
     let sui = SuiRpcClient::new(cfg.sui_rpc_url.clone());
-    let ctx = Arc::new(KeeperContext::new(sui, cfg.clone()));
+    let ctx = Arc::new(KeeperContext::new(sui, cfg.clone(), pool.clone()));
 
     info!(
         dry_run = cfg.keeper_dry_run,
         vault_id = ?cfg.vault_id,
         "keeper started"
     );
+
+    // Parse default strikes from WINDOW_DEFAULT_STRIKES env (JSON array of u64).
+    let default_strikes: Option<Vec<u64>> = cfg
+        .window_default_strikes
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Vec<u64>>(s).ok());
+    db::ensure_window_epoch_scheduled(&pool, default_strikes.as_deref()).await?;
 
     tokio::try_join!(
         run_lane(pool.clone(), redis.clone(), ctx.clone(), JobLane::IntentExecutor),

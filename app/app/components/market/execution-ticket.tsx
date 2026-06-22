@@ -301,7 +301,7 @@ export default function ExecutionTicket() {
               onClick={() => selectPct(pct)}
               className={`h-8 rounded-[6px] border text-[11px] transition-colors ${
                 pctSelected === pct
-                  ? 'border-brand-violet bg-brand-violet/20 text-text-primary'
+                  ? 'border-brand-violet bg-brand-violet text-white font-semibold'
                   : 'border-border-subtle bg-surface-card text-text-quaternary hover:text-text-secondary'
               }`}
             >
@@ -312,7 +312,7 @@ export default function ExecutionTicket() {
             onClick={() => selectPct(100)}
             className={`h-8 rounded-[6px] border text-[11px] transition-colors ${
               pctSelected === 100
-                ? 'border-brand-violet bg-brand-violet/20 text-text-primary'
+                ? 'border-brand-violet bg-brand-violet text-white font-semibold'
                 : 'border-border-subtle bg-surface-card text-text-quaternary hover:text-text-secondary'
             }`}
           >

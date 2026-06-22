@@ -98,9 +98,20 @@ export default function GridChart({
   setFocusedLegKey: (key: string | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Canvas is created programmatically inside the worker-init effect so that
+  // transferControlToOffscreen() is always called on a fresh element, which lets
+  // React StrictMode safely double-invoke the effect without the "already transferred" error.
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ w: 800, h: 500 });
   const { w, h } = size;
+
+  // Stable dispatch refs — pointer handlers are defined later in the render scope
+  // (they need current state), but the actual DOM listeners are attached once and
+  // call through these refs so they always see the latest handler.
+  const onDownRef = useRef<(e: PointerEvent) => void>(() => {});
+  const onMoveRef = useRef<(e: PointerEvent) => void>(() => {});
+  const onUpRef = useRef<() => void>(() => {});
+  const onLeaveRef = useRef<() => void>(() => {});
 
   // Hover is kept in a ref — tooltip updates imperatively to avoid re-renders on every pointermove.
   const tipRef = useRef<HTMLDivElement>(null);
@@ -262,15 +273,40 @@ export default function GridChart({
     return { plotW, plotH, winStart, winEnd, tSpan: (winEnd - winStart) || 1, coordMin, coordMax, coordSpan: (coordMax - coordMin) || 1 };
   };
 
-  // ── worker: init on mount, transfer canvas ownership ─────────────────────
+  // ── worker: init on mount ────────────────────────────────────────────────
+  // Canvas is created here (not in JSX) so every effect invocation gets a brand-new
+  // HTMLCanvasElement. This means transferControlToOffscreen() always succeeds even when
+  // React StrictMode runs the effect twice (mount → cleanup → mount).
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'display:block;position:absolute;top:0;left:0;width:100%;height:100%;';
+    container.appendChild(canvas);
+    canvasRef.current = canvas;
+
+    const offscreen = canvas.transferControlToOffscreen();
     const worker = new Worker(new URL('./grid-worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
-    const offscreen = canvas.transferControlToOffscreen();
     worker.postMessage({ type: 'init', canvas: offscreen, initialPrice: s.price }, [offscreen]);
-    return () => { worker.terminate(); workerRef.current = null; };
+
+    // Stable listeners dispatch to refs so they always call the latest handler.
+    const dn = (e: PointerEvent) => onDownRef.current(e);
+    const mv = (e: PointerEvent) => onMoveRef.current(e);
+    const up = () => onUpRef.current();
+    const lv = () => onLeaveRef.current();
+    canvas.addEventListener('pointerdown', dn);
+    canvas.addEventListener('pointermove', mv);
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointerleave', lv);
+
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+      canvas.remove();
+      canvasRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -382,12 +418,12 @@ export default function GridChart({
     return epoch && band ? { epoch, band } : null;
   };
 
-  const localXY = (e: React.PointerEvent) => {
+  const localXY = (e: PointerEvent) => {
     const r = containerRef.current!.getBoundingClientRect();
     return { mx: e.clientX - r.left, my: e.clientY - r.top };
   };
 
-  const onPointerDown = (e: React.PointerEvent) => {
+  const onPointerDown = (e: PointerEvent) => {
     const { mx, my } = localXY(e);
     const hit = cellAt(mx, my);
     if (!hit || hit.epoch.start <= s.now) return;
@@ -415,7 +451,7 @@ export default function GridChart({
   };
   const hideTip = () => { if (tipRef.current) tipRef.current.style.display = 'none'; };
 
-  const onPointerMove = (e: React.PointerEvent) => {
+  const onPointerMove = (e: PointerEvent) => {
     const { mx, my } = localXY(e);
     const hit = cellAt(mx, my);
     if (!hit) { hideTip(); return; }
@@ -430,6 +466,13 @@ export default function GridChart({
   };
   const onPointerUp = () => { dragging.current = false; };
   const onPointerLeave = () => { dragging.current = false; hideTip(); };
+
+  // Keep dispatch refs current every render so the stable listeners always call
+  // the latest handler (which closes over current s, focusedLegKey, etc.).
+  onDownRef.current = onPointerDown;
+  onMoveRef.current = onPointerMove;
+  onUpRef.current = onPointerUp;
+  onLeaveRef.current = onPointerLeave;
 
   const overlayCells = useMemo(() => {
     const items: { key: string; text?: string; pop: boolean }[] = [];
@@ -487,15 +530,6 @@ export default function GridChart({
 
       {/* Chart area */}
       <div ref={containerRef} className="relative flex-1 overflow-hidden select-none">
-        {/* Canvas is owned by the worker after mount — do not set width/height from React */}
-        <canvas
-          ref={canvasRef}
-          style={{ width: w, height: h, display: 'block' }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerLeave}
-        />
 
         {/* DOM animation overlay — only cells mid-animation */}
         {overlayCells.map(({ key, text, pop }) => {

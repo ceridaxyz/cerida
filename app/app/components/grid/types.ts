@@ -18,10 +18,11 @@ export interface Band {
 }
 
 export interface Epoch {
-  id: string;
+  id: string;       // oracle_id from predict-server
+  oracleId: string; // same as id; explicit for order submission
   idx: number;
-  start: number; // ms timestamp
-  end: number;
+  start: number;    // ms — estimated epoch open (expiry - 30 min)
+  end: number;      // ms — oracle expiry
 }
 
 export interface GridCell {

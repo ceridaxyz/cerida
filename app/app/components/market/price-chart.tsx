@@ -12,6 +12,7 @@ import {
 } from 'lightweight-charts';
 import { getActiveLadder, getHistory, type HistPoint } from '../../lib/cerida-api';
 import { yesNo } from '../../lib/svi';
+import { useLevels } from './levels-context';
 
 const POLL_MS       = 4000;
 const TARGET_CANDLES = 48;
@@ -86,10 +87,8 @@ export default function PriceChart() {
   const [hdr,    setHdr]    = useState<{ yes: number; chg: number } | null>(null)
   const [err,    setErr]    = useState<string | null>(null)
 
-  // Level state (in YES ¢)
-  const [tp,    setTp]    = useState<number | null>(null)
-  const [sl,    setSl]    = useState<number | null>(null)
-  const [entry, setEntry] = useState<number | null>(null)
+  // Level state sourced from shared context (trading panel writes, chart displays)
+  const { tp, sl, entry, setTp, setSl, setEntry, clearAll } = useLevels()
   const [showLevels, setShowLevels] = useState(false)
 
   const tpLine    = useLevelLine(seriesRef, TP_COLOR,    'TP')
@@ -196,10 +195,10 @@ export default function PriceChart() {
         {/* Levels toggle */}
         <button
           onClick={() => setShowLevels(v => !v)}
-          className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded-[5px] text-[10px] font-medium transition-colors ${
+          className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded-[5px] text-[10px] font-medium transition-colors border ${
             showLevels
-              ? 'bg-brand-violet/20 text-brand-violet border border-brand-violet/30'
-              : 'text-text-quaternary hover:text-text-secondary border border-transparent'
+              ? 'bg-surface-hover text-text-primary border-brand-violet'
+              : 'text-text-quaternary hover:text-text-secondary border-transparent'
           }`}
         >
           Levels
@@ -247,7 +246,7 @@ export default function PriceChart() {
             <>
               <div className="w-px h-5 bg-border-subtle" />
               <button
-                onClick={() => { setTp(null); setSl(null); setEntry(null) }}
+                onClick={clearAll}
                 className="text-[9px] text-text-quaternary hover:text-bearish-red transition-colors"
               >
                 Clear all

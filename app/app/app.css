@@ -81,6 +81,26 @@
   box-sizing: border-box;
 }
 
+/* Global Cursor Pointer Reset for Clickable Elements */
+button,
+a,
+select,
+input[type="button"],
+input[type="submit"],
+[role="button"],
+.cursor-pointer {
+  cursor: pointer !important;
+}
+
+/* Ensure SVG icons and nested child elements inherit pointer cursor */
+button *,
+a *,
+[role="button"] *,
+.cursor-pointer * {
+  cursor: pointer !important;
+}
+
+
 /* Remove default browser outline, replace with accent ring on keyboard focus */
 :focus {
   outline: none;

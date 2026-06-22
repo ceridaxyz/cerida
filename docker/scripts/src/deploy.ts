@@ -64,6 +64,8 @@ async function main() {
     'leverageBookId',
     'limitBookId',
     'leverageSeeded',
+    'windowBookId',
+    'keeperOracleCapId',
   ] as const) {
     delete (m as Record<string, unknown>)[k];
   }

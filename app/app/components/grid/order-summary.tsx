@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { GridState } from './use-grid-state';
 import { computeAnalytics } from './analytics';
 
@@ -16,29 +16,105 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
   );
 }
 
+function LegRow({
+  legKey,
+  lower,
+  upper,
+  cost,
+  multiplier,
+  onCostChange,
+  onRemove,
+}: {
+  legKey: string
+  lower: number
+  upper: number
+  cost: number
+  multiplier: number
+  onCostChange: (key: string, v: number) => void
+  onRemove: (key: string) => void
+}) {
+  const [raw, setRaw] = useState(String(cost))
+  const focused = useRef(false)
+
+  // Sync display when cost changes externally, but never interrupt active typing
+  useEffect(() => {
+    if (!focused.current) setRaw(String(cost))
+  }, [cost])
+
+  const commit = () => {
+    focused.current = false
+    const n = parseFloat(raw)
+    if (!isNaN(n) && n >= 0) onCostChange(legKey, n)
+    else setRaw(String(cost))
+  }
+
+  const payout = cost * multiplier
+
+  return (
+    <div className="flex items-center gap-2 py-1 border-b border-border-subtle/40 last:border-0">
+      {/* Band range */}
+      <span
+        className="flex-1 text-[10px] text-text-tertiary truncate"
+        style={{ fontFamily: 'var(--font-mono)' }}
+      >
+        ${lower}–{upper}
+      </span>
+
+      {/* Cost input */}
+      <div className="flex items-center bg-surface-card rounded-[5px] px-1.5 py-0.5 border border-border-subtle gap-0.5 w-16 shrink-0">
+        <span className="text-text-quaternary text-[10px]">$</span>
+        <input
+          type="number"
+          min={0}
+          value={raw}
+          onChange={e => setRaw(e.target.value)}
+          onBlur={commit}
+          onFocus={e => { focused.current = true; e.target.select() }}
+          onKeyDown={e => e.key === 'Enter' && commit()}
+          className="flex-1 bg-transparent text-[11px] font-medium text-text-primary outline-none w-0"
+          style={{ fontFamily: 'var(--font-mono)' }}
+        />
+      </div>
+
+      {/* Payout */}
+      <span
+        className="text-[10px] text-bullish-green w-14 text-right shrink-0"
+        style={{ fontFamily: 'var(--font-mono)' }}
+      >
+        ${payout.toFixed(2)}
+      </span>
+
+      {/* Remove */}
+      <button
+        onClick={() => onRemove(legKey)}
+        className="text-[11px] text-text-quaternary hover:text-bearish-red transition-colors shrink-0 leading-none"
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
 export default function OrderSummary({ s }: { s: GridState }) {
-  const { legsArr } = s;
-  const [slipOpen, setSlipOpen] = useState(false);
-  const [slip,     setSlip]     = useState('1.0');
+  const { legsArr } = s
+  const [slipOpen, setSlipOpen] = useState(false)
+  const [slip, setSlip] = useState('1.0')
+  const [applyStake, setApplyStake] = useState(String(s.stake))
 
-  const stake    = s.stake;
-  const setStake = (v: string) => s.setStake(Math.max(0, parseFloat(v) || 0));
-  const hasLegs  = legsArr.length > 0;
-  const a        = computeAnalytics(s);
+  const hasLegs = legsArr.length > 0
+  const a = computeAnalytics(s)
 
-  const totalCost  = stake * legsArr.length;
-  const bestPayout = legsArr.reduce((m, l) => Math.max(m, stake * l.multiplier), 0);
+  // Derive totals from per-leg costs
+  const totalCost  = legsArr.reduce((sum, l) => sum + l.cost, 0)
+  const bestPayout = legsArr.reduce((m, l) => Math.max(m, l.cost * l.multiplier), 0)
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, { lower: number; upper: number; epochId: string; mult: number; count: number }>();
-    for (const l of legsArr) {
-      const k = `${l.epochId}:${l.lower}-${l.upper}`;
-      const g = map.get(k) ?? { lower: l.lower, upper: l.upper, epochId: l.epochId, mult: l.multiplier, count: 0 };
-      g.count++;
-      map.set(k, g);
+  const handleApplyAll = () => {
+    const n = parseFloat(applyStake)
+    if (!isNaN(n) && n >= 0) {
+      s.updateAllLegCosts(n)
+      s.setStake(n)
     }
-    return [...map.values()].sort((a, b) => b.lower - a.lower);
-  }, [legsArr]);
+  }
 
   return (
     <div className="flex flex-col h-full text-[11px]">
@@ -50,29 +126,40 @@ export default function OrderSummary({ s }: { s: GridState }) {
 
       <div className="flex flex-col gap-2.5 px-3 py-2.5 flex-1 overflow-auto no-scrollbar">
 
-        {/* Stake */}
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-text-quaternary">Stake / band</span>
-          <div className="flex items-center bg-surface-card rounded-[6px] px-2 py-1 border border-border-subtle gap-1 w-24">
+        {/* Default size for new selections */}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-text-quaternary shrink-0">Size</span>
+          <div className="flex items-center bg-surface-card rounded-[6px] px-2 py-1 border border-border-subtle gap-1 flex-1">
             <span className="text-text-quaternary text-[11px]">$</span>
             <input
-              type="number" min={0} value={String(stake)}
-              onChange={e => setStake(e.target.value)}
+              type="number"
+              min={0}
+              value={applyStake}
+              onChange={e => { setApplyStake(e.target.value); const n = parseFloat(e.target.value); if (!isNaN(n) && n >= 0) s.setStake(n) }}
               className="flex-1 bg-transparent text-[12px] font-medium text-text-primary outline-none w-0"
               style={{ fontFamily: 'var(--font-mono)' }}
             />
           </div>
+          <button
+            onClick={handleApplyAll}
+            title="Apply this size to all legs"
+            className="shrink-0 px-2 py-1 text-[10px] font-semibold rounded-[5px] bg-surface-hover text-text-secondary hover:text-text-primary border border-border-subtle transition-colors"
+          >
+            All
+          </button>
         </div>
+
+        {/* Quick amounts — set default only, do not overwrite existing legs */}
         <div className="flex gap-1">
           {[5, 10, 25, 50].map(v => (
             <button
               key={v}
-              onClick={() => s.setStake(v)}
+              onClick={() => { setApplyStake(String(v)); s.setStake(v) }}
               className="flex-1 py-1 rounded-[5px] text-[10px] font-medium transition-colors"
               style={{
-                background: stake === v ? 'var(--color-surface-hover)' : 'var(--color-surface-card)',
-                color:      stake === v ? 'var(--color-text-primary)'   : 'var(--color-text-tertiary)',
-                border:     `1px solid ${stake === v ? 'var(--color-border-default)' : 'var(--color-border-subtle)'}`,
+                background: s.stake === v ? 'var(--color-surface-hover)' : 'var(--color-surface-card)',
+                color:      s.stake === v ? 'var(--color-text-primary)'   : 'var(--color-text-tertiary)',
+                border:     `1px solid ${s.stake === v ? 'var(--color-border-default)' : 'var(--color-border-subtle)'}`,
               }}
             >
               ${v}
@@ -125,25 +212,27 @@ export default function OrderSummary({ s }: { s: GridState }) {
           </div>
         )}
 
-        {/* Band breakdown */}
-        {hasLegs && grouped.length > 0 && (
-          <div className="border-t border-border-subtle pt-2 mt-1 flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-text-quaternary">
-              {grouped.length} band{grouped.length === 1 ? '' : 's'} · {legsArr.length} leg{legsArr.length === 1 ? '' : 's'}
-            </span>
-            {grouped.map(g => (
-              <div
-                key={`${g.epochId}:${g.lower}-${g.upper}`}
-                className="flex items-center justify-between text-[10px]"
-              >
-                <span className="text-text-tertiary" style={{ fontFamily: 'var(--font-mono)' }}>
-                  ${g.lower}–{g.upper}
-                  {g.count > 1 && <span className="text-text-quaternary"> ×{g.count}</span>}
-                </span>
-                <span className="text-text-quaternary" style={{ fontFamily: 'var(--font-mono)' }}>
-                  ${(stake * g.count).toFixed(2)} → ${(stake * g.mult * g.count).toFixed(2)}
-                </span>
-              </div>
+        {/* Per-leg breakdown */}
+        {hasLegs && (
+          <div className="border-t border-border-subtle pt-2 mt-1">
+            {/* Column headers */}
+            <div className="flex items-center gap-2 pb-1">
+              <span className="flex-1 text-[9px] uppercase tracking-wider text-text-quaternary">Band</span>
+              <span className="w-16 text-[9px] uppercase tracking-wider text-text-quaternary shrink-0">Cost</span>
+              <span className="w-14 text-right text-[9px] uppercase tracking-wider text-text-quaternary shrink-0">Pays</span>
+              <span className="w-3 shrink-0" />
+            </div>
+            {legsArr.map(leg => (
+              <LegRow
+                key={leg.key}
+                legKey={leg.key}
+                lower={leg.lower}
+                upper={leg.upper}
+                cost={leg.cost}
+                multiplier={leg.multiplier}
+                onCostChange={s.updateLegCost}
+                onRemove={s.removeLeg}
+              />
             ))}
           </div>
         )}
@@ -173,5 +262,5 @@ export default function OrderSummary({ s }: { s: GridState }) {
         </button>
       </div>
     </div>
-  );
+  )
 }

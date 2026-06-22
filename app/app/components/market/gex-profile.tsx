@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { getChartOracle, getLatestPrice, getLatestSvi, SCALE } from '../../lib/predict-api'
+import { yesNo, impliedVol } from '../../lib/svi'
 
 // ── Math ─────────────────────────────────────────────────────────────────────
 
@@ -18,8 +21,9 @@ function niceStep(price: number) {
   return mult * pow
 }
 
-function srng(seed: number, idx: number) {
-  const x = Math.sin(seed * 127.1 + idx * 311.7) * 43758.5453
+// Deterministic pseudo-random per strike — stable OI shape, no flicker
+function srng(strike: number, idx: number) {
+  const x = Math.sin(strike * 0.00127 + idx * 311.7) * 43758.5453
   return x - Math.floor(x)
 }
 
@@ -40,6 +44,15 @@ function fmtK(s: number) {
 
 const NUM_STRIKES = 22
 
+interface GexInput {
+  spot:      number
+  forward:   number
+  svi:       import('../../lib/svi').Svi
+  minStrike: number // raw 1e9-scaled
+  tickSize:  number // raw 1e9-scaled
+  expiry:    number // ms
+}
+
 interface Row {
   strike:    number
   net:       number
@@ -52,28 +65,41 @@ interface Row {
   inExpMove: boolean
 }
 
-function buildRows(spot: number, iv: number, seed: number): Row[] {
-  const step = niceStep(spot)
-  const base = Math.round(spot / step) * step
-  const T    = 0.5 / 365
-  const sig  = iv * Math.sqrt(T)
+function buildRows(input: GexInput): Row[] {
+  const { spot, forward, svi, minStrike, tickSize, expiry } = input
+  const step = tickSize / SCALE
+  const min  = minStrike / SCALE
+
+  // Center the visible window around spot
+  const centerIdx = Math.round((spot - min) / step)
+  const startIdx  = Math.max(0, centerIdx - Math.floor(NUM_STRIKES / 2))
+
+  const tYears = Math.max((expiry - Date.now()) / (365.25 * 24 * 3600 * 1000), 1 / 365)
+  // 1σ expected move from ATM vol
+  const atmVol  = impliedVol(svi, forward, forward, tYears)
+  const sig     = atmVol * Math.sqrt(tYears)
   const expUp   = spot * Math.exp( sig)
   const expDown = spot * Math.exp(-sig)
 
   const raw = Array.from({ length: NUM_STRIKES }, (_, i) => {
-    const strike = base + (i - Math.floor(NUM_STRIKES / 2)) * step
-    const d      = Math.log(spot / strike) / sig
-    const gamma  = normPdf(d) / (spot * sig)
-    const prob   = normCdf(d)
-    const dStep  = Math.abs(strike - spot) / step
-    const oiBase = 12_000_000 * Math.exp(-0.32 * dStep * dStep)
-    const oi     = oiBase * (0.6 + srng(seed, i * 3) * 0.8)
-    const yFrac  = strike > spot
-      ? 0.60 + srng(seed + 1, i * 7) * 0.28
-      : 0.24 + srng(seed + 2, i * 5) * 0.20
-    const gexUnit = gamma * spot * spot * 0.01
-    const yesGex  = yFrac       * oi * gexUnit * (0.85 + srng(seed + 3, i * 11) * 0.3)
-    const noGex   = (1 - yFrac) * oi * gexUnit * (0.85 + srng(seed + 4, i * 13) * 0.3)
+    const strike = min + (startIdx + i) * step
+    // Real per-strike vol → real gamma
+    const vol     = impliedVol(svi, forward, strike, tYears)
+    const volT    = Math.max(vol * Math.sqrt(tYears), 1e-9)
+    const d1      = Math.log(forward / strike) / volT + 0.5 * volT
+    const gamma   = normPdf(d1) / (strike * volT)
+    // Real yes/no probabilities from SVI
+    const { yes } = yesNo(svi, forward, strike)
+    const prob    = yes
+    // Stable pseudo-random OI shape (seeded by strike, not time)
+    const dStep   = Math.abs(strike - spot) / step
+    const oiBase  = 12_000_000 * Math.exp(-0.32 * dStep * dStep)
+    const oi      = oiBase * (0.6 + srng(strike, 3) * 0.8)
+    // YES buyers cluster above spot (they need price to stay high), NO buyers below
+    const yFrac   = prob  // real probability drives the YES/NO OI split
+    const gexUnit = gamma * strike * strike * 0.01
+    const yesGex  = yFrac       * oi * gexUnit * (0.85 + srng(strike, 11) * 0.3)
+    const noGex   = (1 - yFrac) * oi * gexUnit * (0.85 + srng(strike, 13) * 0.3)
     return {
       strike, net: yesGex - noGex, yesGex, noGex, oi, prob,
       label: undefined as Row['label'],
@@ -99,36 +125,70 @@ function buildRows(spot: number, iv: number, seed: number): Row[] {
 
 // ── Label styling ─────────────────────────────────────────────────────────────
 
-const LABEL_STYLE: Record<string, { bg: string; border: string; color: string }> = {
-  'YES Wall': { bg: 'rgba(11,153,129,0.13)',  border: 'rgba(11,153,129,0.35)',  color: '#0b9981' },
-  'NO Wall':  { bg: 'rgba(242,53,70,0.13)',   border: 'rgba(242,53,70,0.35)',   color: '#f23546' },
-  'Pin Risk': { bg: 'rgba(128,125,254,0.13)', border: 'rgba(128,125,254,0.35)', color: '#807dfe' },
+const LABEL_THEME: Record<string, { bg: string; border: string; text: string; hex: string }> = {
+  'YES Wall': { bg: 'bg-surface-card',  border: 'border-bullish-green/50',  text: 'text-bullish-green', hex: '#0b9981' },
+  'NO Wall':  { bg: 'bg-surface-card',   border: 'border-bearish-red/50',   text: 'text-bearish-red',  hex: '#f23546' },
+  'Pin Risk': { bg: 'bg-surface-card', border: 'border-brand-violet/50', text: 'text-brand-violet', hex: '#807dfe' },
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function GexProfile() {
-  const [spot, setSpot]   = useState(66_500)
-  const [iv,   setIv]     = useState(0.62)
-  const [seed, setSeed]   = useState(() => Math.floor(Date.now() / 20_000))
   const [hover, setHover] = useState<number | null>(null)
   const [mode, setMode]   = useState<'net' | 'split'>('net')
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      setSpot(s => Math.max(10_000, s + (Math.random() - 0.49) * 140))
-      setIv(v   => Math.max(0.25, Math.min(1.5, v + (Math.random() - 0.5) * 0.02)))
-      setSeed(s => s + 1)
-    }, 2500)
-    return () => clearInterval(id)
-  }, [])
+  const { data: oracle } = useQuery({
+    queryKey: ['gex-oracle'],
+    queryFn: getChartOracle,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
 
-  const rows   = useMemo(() => buildRows(spot, iv, seed), [spot, iv, seed])
+  const { data: priceData } = useQuery({
+    queryKey: ['gex-price', oracle?.oracle_id],
+    queryFn: () => getLatestPrice(oracle!.oracle_id),
+    enabled: !!oracle,
+    refetchInterval: 5_000,
+  })
+
+  const { data: sviData } = useQuery({
+    queryKey: ['gex-svi', oracle?.oracle_id],
+    queryFn: () => getLatestSvi(oracle!.oracle_id),
+    enabled: !!oracle,
+    refetchInterval: 10_000,
+  })
+
+  const spot    = priceData?.spot    ?? 0
+  const forward = priceData?.forward ?? spot
+  const atmVol  = sviData
+    ? impliedVol(sviData, forward || spot, forward || spot, Math.max((oracle!.expiry - Date.now()) / (365.25 * 24 * 3600 * 1000), 1 / 365))
+    : 0
+
+  const rows = useMemo(() => {
+    if (!oracle || !priceData || !sviData) return []
+    return buildRows({
+      spot:      priceData.spot,
+      forward:   priceData.forward,
+      svi:       sviData,
+      minStrike: oracle.min_strike,
+      tickSize:  oracle.tick_size,
+      expiry:    oracle.expiry,
+    })
+  }, [oracle, priceData, sviData])
+
   const maxAbs = useMemo(() => Math.max(...rows.map(r => Math.abs(r.net)), 1), [rows])
 
   const yesWall = rows.find(r => r.label === 'YES Wall')
   const noWall  = rows.find(r => r.label === 'NO Wall')
   const pinRisk = rows.find(r => r.label === 'Pin Risk')
+
+  if (!oracle || !priceData || !sviData) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-[11px] text-text-quaternary">Loading…</span>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -165,21 +225,20 @@ export default function GexProfile() {
         {/* Key levels summary */}
         <div className="flex items-center gap-2 flex-wrap">
           {[
-            { label: 'YES Wall', val: yesWall?.strike, color: '#0b9981' },
-            { label: 'NO Wall',  val: noWall?.strike,  color: '#f23546' },
-            { label: 'Pin Risk', val: pinRisk?.strike, color: '#807dfe' },
-          ].map(({ label, val, color }) => val != null && (
+            { label: 'YES Wall', val: yesWall?.strike, theme: LABEL_THEME['YES Wall'] },
+            { label: 'NO Wall',  val: noWall?.strike,  theme: LABEL_THEME['NO Wall'] },
+            { label: 'Pin Risk', val: pinRisk?.strike, theme: LABEL_THEME['Pin Risk'] },
+          ].map(({ label, val, theme }) => val != null && (
             <div
               key={label}
-              className="flex items-center gap-1.5 text-[10px] px-1.5 py-px rounded-[4px]"
-              style={{ background: `${color}11`, border: `1px solid ${color}28` }}
+              className={`flex items-center gap-1.5 text-[10px] px-1.5 py-px rounded-[6px] border-[1.5px] ${theme.bg} ${theme.border}`}
             >
-              <span style={{ color, fontWeight: 600 }}>{label}</span>
-              <span style={{ color: 'var(--color-text-tertiary)' }}>${fmtK(val)}</span>
+              <span className={`font-semibold ${theme.text}`}>{label}</span>
+              <span className="text-text-tertiary">${fmtK(val)}</span>
             </div>
           ))}
           <div className="ml-auto text-[10px] text-text-quaternary">
-            IV <span style={{ color: 'var(--color-text-secondary)' }}>{(iv * 100).toFixed(0)}%</span>
+            IV <span style={{ color: 'var(--color-text-secondary)' }}>{(atmVol * 100).toFixed(0)}%</span>
           </div>
         </div>
       </div>
@@ -190,7 +249,6 @@ export default function GexProfile() {
           const frac    = Math.abs(row.net) / maxAbs
           const isPos   = row.net >= 0
           const hovered = hover === i
-          const ls      = row.label ? LABEL_STYLE[row.label] : null
 
           return (
             <div key={row.strike} className="flex-1 flex flex-col min-h-0 justify-center">
@@ -200,14 +258,11 @@ export default function GexProfile() {
                 <div className="flex items-center gap-1 shrink-0 mb-px">
                   <div className="w-[68px] shrink-0" />
                   <div className="flex-1 flex items-center gap-1">
-                    <div className="flex-1 border-t" style={{ borderColor: 'rgba(128,125,254,0.35)', borderStyle: 'dashed' }} />
-                    <span
-                      className="text-[9px] font-semibold px-1.5 py-px rounded-[3px] shrink-0"
-                      style={{ background: 'rgba(128,125,254,0.15)', color: '#807dfe', border: '1px solid rgba(128,125,254,0.3)' }}
-                    >
+                    <div className="flex-1 border-t border-dashed border-brand-violet/35" />
+                    <span className="text-[9px] font-semibold px-1.5 py-px rounded-[6px] shrink-0 bg-surface-card text-brand-violet border-[1.5px] border-brand-violet/40">
                       ${fmtK(spot)}
                     </span>
-                    <div className="flex-1 border-t" style={{ borderColor: 'rgba(128,125,254,0.35)', borderStyle: 'dashed' }} />
+                    <div className="flex-1 border-t border-dashed border-brand-violet/35" />
                   </div>
                   <div className="w-[48px] shrink-0" />
                 </div>
@@ -220,12 +275,10 @@ export default function GexProfile() {
                 onMouseLeave={() => setHover(null)}
               >
                 {hovered && (
-                  <div className="absolute inset-0 rounded-[4px]"
-                    style={{ background: 'rgba(255,255,255,0.03)' }} />
+                  <div className="absolute inset-0 rounded-[4px] bg-white/3" />
                 )}
                 {row.inExpMove && (
-                  <div className="absolute inset-y-0 left-[68px] right-[48px] rounded-sm pointer-events-none"
-                    style={{ background: 'rgba(128,125,254,0.04)' }} />
+                  <div className="absolute inset-y-0 left-[68px] right-[48px] rounded-sm pointer-events-none bg-brand-violet/4" />
                 )}
 
                 {/* Strike label */}
@@ -250,49 +303,47 @@ export default function GexProfile() {
 
                   {mode === 'net' ? (
                     <div
-                      className="absolute rounded-[2px] transition-all duration-500"
+                      className={`absolute rounded-[2px] transition-all duration-500 ${
+                        isPos
+                          ? (hovered ? 'bg-bullish-green/90' : 'bg-bullish-green/65')
+                          : (hovered ? 'bg-bearish-red/90' : 'bg-bearish-red/65')
+                      }`}
                       style={{
                         height:    hovered ? 9 : 7,
                         top: '50%', transform: 'translateY(-50%)',
                         ...(isPos
                           ? { left: '50%',  width: `${frac * 47}%` }
                           : { right: '50%', width: `${frac * 47}%` }),
-                        background: isPos
-                          ? `rgba(11,153,129,${hovered ? 0.9 : 0.65})`
-                          : `rgba(242,53,70,${hovered  ? 0.9 : 0.65})`,
                       }}
                     />
                   ) : (
                     <>
-                      <div className="absolute rounded-[2px] transition-all duration-500"
+                      <div className={`absolute rounded-[2px] transition-all duration-500 ${hovered ? 'bg-bullish-green/85' : 'bg-bullish-green/60'}`}
                         style={{
                           height: 4, top: '50%', transform: 'translateY(-140%)',
                           left: '50%',
                           width: `${(row.yesGex / (maxAbs * 2)) * 94}%`,
-                          background: `rgba(11,153,129,${hovered ? 0.85 : 0.6})`,
                         }}
                       />
-                      <div className="absolute rounded-[2px] transition-all duration-500"
+                      <div className={`absolute rounded-[2px] transition-all duration-500 ${hovered ? 'bg-bearish-red/85' : 'bg-bearish-red/60'}`}
                         style={{
                           height: 4, top: '50%', transform: 'translateY(40%)',
                           right: '50%',
                           width: `${(row.noGex / (maxAbs * 2)) * 94}%`,
-                          background: `rgba(242,53,70,${hovered ? 0.85 : 0.6})`,
                         }}
                       />
                     </>
                   )}
 
                   {/* Key level badge */}
-                  {ls && (
+                  {row.label && (
                     <div
-                      className="absolute text-[9px] font-bold px-1.5 py-px rounded-[3px] whitespace-nowrap z-10"
+                      className={`absolute text-[9px] font-bold px-1.5 py-px rounded-[6px] whitespace-nowrap z-10 border-[1.5px] ${LABEL_THEME[row.label].bg} ${LABEL_THEME[row.label].text} ${LABEL_THEME[row.label].border}`}
                       style={{
                         top: '50%', transform: 'translateY(-50%)',
                         ...(isPos || row.label === 'Pin Risk'
                           ? { left:  `calc(50% + ${frac * 47}% + 4px)` }
                           : { right: `calc(50% + ${frac * 47}% + 4px)` }),
-                        background: ls.bg, color: ls.color, border: `1px solid ${ls.border}`,
                       }}
                     >
                       {row.label}
@@ -329,11 +380,9 @@ export default function GexProfile() {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[11px] font-bold text-text-primary">${fmtK(row.strike)}</span>
                       <span
-                        className="text-[10px] font-semibold px-1.5 py-px rounded-[4px]"
-                        style={{
-                          background: row.prob > 0.5 ? 'rgba(11,153,129,0.15)' : 'rgba(242,53,70,0.15)',
-                          color:      row.prob > 0.5 ? '#0b9981' : '#f23546',
-                        }}
+                        className={`text-[10px] font-semibold px-1.5 py-px rounded-[6px] border-[1.5px] ${
+                          row.prob > 0.5 ? 'bg-surface-primary border-bullish-green/30 text-bullish-green' : 'bg-surface-primary border-bearish-red/30 text-bearish-red'
+                        }`}
                       >
                         YES {(row.prob * 100).toFixed(1)}%
                       </span>
@@ -360,19 +409,19 @@ export default function GexProfile() {
       {/* ── Footer ── */}
       <div className="shrink-0 flex items-center gap-3 px-3 py-1.5 border-t border-border-subtle">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-[2px]" style={{ background: 'rgba(11,153,129,0.7)' }} />
+          <span className="w-2 h-2 rounded-[2px] bg-bullish-green/70" />
           <span className="text-[10px] text-text-quaternary">YES Γ</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-[2px]" style={{ background: 'rgba(242,53,70,0.7)' }} />
+          <span className="w-2 h-2 rounded-[2px] bg-bearish-red/70" />
           <span className="text-[10px] text-text-quaternary">NO Γ</span>
         </div>
         <div className="flex items-center gap-1.5 ml-1">
-          <span className="w-2 h-2 rounded-[2px]" style={{ background: 'rgba(128,125,254,0.18)', border: '1px solid rgba(128,125,254,0.3)' }} />
+          <span className="w-2 h-2 rounded-[2px] bg-brand-violet/18 border border-brand-violet/30" />
           <span className="text-[10px] text-text-quaternary">1σ move</span>
         </div>
         <div className="ml-auto text-[11px] font-semibold text-text-primary">
-          ${fmtK(spot)}
+          ${fmtK(priceData.spot)}
         </div>
       </div>
     </div>

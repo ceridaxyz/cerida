@@ -117,15 +117,12 @@ function StrategyCard({ s, onSelect }: { s: Strategy; onSelect: () => void }) {
   return (
     <button
       onClick={onSelect}
-      className="flex flex-col gap-1.5 p-2 rounded-[10px] text-left transition-all hover:scale-[1.02]"
-      style={{
-        background: `${s.color}0d`,
-        border: `1px solid ${s.color}30`,
-      }}
+      className="flex flex-col gap-1.5 p-2.5 rounded-[10px] text-left border border-border-subtle bg-surface-card hover:bg-surface-hover hover:border-text-quaternary transition-all hover:scale-[1.01] cursor-pointer"
     >
       {/* Name + tagline */}
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-[11px] font-semibold" style={{ color: s.color }}>
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+        <span className="text-[11px] font-bold text-text-primary">
           {s.name}
         </span>
         <span className="text-[9px] text-text-quaternary">{s.tagline}</span>
@@ -136,11 +133,13 @@ function StrategyCard({ s, onSelect }: { s: Strategy; onSelect: () => void }) {
         {s.legs.map((leg, i) => (
           <span key={i} className="flex items-center gap-1">
             <span
-              className="text-[8px] font-bold px-1 py-0.5 rounded-[3px]"
-              style={{
-                background: `${DIR_COLOR[leg.dir]}18`,
-                color: DIR_COLOR[leg.dir],
-              }}
+              className={`text-[8px] font-bold px-1.5 py-0.5 rounded-[6px] border-[1.5px] bg-surface-primary ${
+                leg.dir === 'yes'
+                  ? 'text-bullish-green border-bullish-green/20'
+                  : leg.dir === 'no'
+                  ? 'text-bearish-red border-bearish-red/20'
+                  : 'text-brand-violet border-brand-violet/20'
+              }`}
             >
               {leg.label}
             </span>
@@ -310,10 +309,7 @@ export default function ComboTray() {
 
                 {/* Hint when no legs yet */}
                 {legs.length === 0 && (
-                  <div
-                    className="rounded-[8px] px-2.5 py-3 text-center"
-                    style={{ background: `${accentColor}08`, border: `1px dashed ${accentColor}30` }}
-                  >
+                  <div className="rounded-[8px] px-2.5 py-3 text-center border border-dashed border-border-subtle bg-surface-primary">
                     <p className="text-[9px] text-text-quaternary leading-relaxed">
                       {strategy?.kind === 6
                         ? 'Add any legs from the Trade or Range widgets'
@@ -332,12 +328,11 @@ export default function ComboTray() {
                       <button
                         key={m}
                         onClick={() => setMode(m)}
-                        className="flex-1 py-1 text-[9px] font-semibold uppercase tracking-widest rounded-[6px] transition-colors"
-                        style={{
-                          background: mode === m ? `${accentColor}18` : 'var(--color-surface-card)',
-                          color:      mode === m ? accentColor : 'var(--color-text-quaternary)',
-                          border:     `1px solid ${mode === m ? `${accentColor}40` : 'var(--color-border-subtle)'}`,
-                        }}
+                        className={`flex-1 py-1 text-[9px] font-semibold uppercase tracking-widest rounded-[6px] transition-colors border ${
+                          mode === m
+                            ? 'bg-surface-hover text-text-primary border-brand-violet'
+                            : 'bg-surface-card text-text-quaternary border-border-subtle hover:text-text-secondary'
+                        }`}
                       >
                         {m}
                       </button>
@@ -359,11 +354,13 @@ export default function ComboTray() {
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <span
-                              className="text-[9px] font-bold px-1.5 py-0.5 rounded-[4px] shrink-0 uppercase"
-                              style={{
-                                background: `${DIR_COLOR[leg.direction]}18`,
-                                color: DIR_COLOR[leg.direction],
-                              }}
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-[6px] shrink-0 uppercase border-[1.5px] bg-surface-primary ${
+                                leg.direction === 'yes'
+                                  ? 'text-bullish-green border-bullish-green/20'
+                                  : leg.direction === 'no'
+                                  ? 'text-bearish-red border-bearish-red/20'
+                                  : 'text-brand-violet border-brand-violet/20'
+                              }`}
                             >
                               {leg.direction}
                             </span>
@@ -418,28 +415,18 @@ export default function ComboTray() {
 
                 {/* Status banners */}
                 {status === 'submitted' && result && (
-                  <div
-                    className="text-[10px] rounded-[6px] px-2 py-1.5 text-center"
-                    style={{
-                      background: 'rgba(11,153,129,0.12)',
-                      color: '#0b9981',
-                      border: '1px solid rgba(11,153,129,0.25)',
-                    }}
-                  >
-                    Submitted ·{' '}
-                    <span className="font-mono">{result.tx_digest.slice(0, 10)}…</span>
+                  <div className="text-[10px] rounded-[6px] px-2 py-1.5 text-left border border-border-subtle bg-surface-primary text-text-secondary flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-bullish-green shrink-0" />
+                    <span>
+                      Submitted ·{' '}
+                      <span className="font-mono">{result.tx_digest.slice(0, 10)}…</span>
+                    </span>
                   </div>
                 )}
                 {status === 'error' && error && (
-                  <div
-                    className="text-[10px] rounded-[6px] px-2 py-1.5 text-center"
-                    style={{
-                      background: 'rgba(242,53,70,0.12)',
-                      color: '#f23546',
-                      border: '1px solid rgba(242,53,70,0.25)',
-                    }}
-                  >
-                    {error}
+                  <div className="text-[10px] rounded-[6px] px-2 py-1.5 text-left border border-border-subtle bg-surface-primary text-text-secondary flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-bearish-red shrink-0" />
+                    <span className="truncate">{error}</span>
                   </div>
                 )}
 

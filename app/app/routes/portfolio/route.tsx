@@ -18,7 +18,7 @@ import { toast } from '../../components/toast/toast-context'
 
 export const meta = () => [{ title: 'Portfolio - Cerida' }]
 
-type PortfolioTab = 'positions' | 'activity' | 'copy' | 'analytics'
+type PortfolioTab = 'positions' | 'orders' | 'combos' | 'history' | 'trades'
 type TimeView = 'calendar' | 'chart'
 type PnlMode = 'pnl' | 'volume'
 type PositionStatus = 'all' | 'open' | 'settled'
@@ -160,15 +160,15 @@ const Toggle = ({ checked, onChange }: { checked: boolean; onChange: () => void 
   <button
     onClick={onChange}
     className={cx(
-      'h-5 w-9 rounded-pill border transition-colors p-0.5',
-      checked ? 'border-bullish-green bg-bullish-green/20' : 'border-border-default bg-surface-card',
+      'h-5 w-9 rounded-pill border p-0.5 transition-colors',
+      checked ? 'border-bullish-green bg-bullish-green' : 'border-border-default bg-surface-card',
     )}
     aria-pressed={checked}
   >
     <span
       className={cx(
-        'block h-3.5 w-3.5 rounded-pill transition-transform',
-        checked ? 'translate-x-4 bg-bullish-green' : 'translate-x-0 bg-text-quaternary',
+        'block h-3.5 w-3.5 rounded-pill transition-transform bg-white',
+        checked ? 'translate-x-4' : 'translate-x-0',
       )}
     />
   </button>
@@ -203,7 +203,7 @@ function PortfolioPage() {
     return (
       <main className="flex-1 flex flex-col items-center justify-center bg-page p-6 text-center">
         <div className="max-w-md border border-border-subtle bg-surface-primary rounded-card p-8 flex flex-col items-center shadow-xl">
-          <div className="w-16 h-16 rounded-full bg-brand-violet/10 flex items-center justify-center mb-6 text-brand-violet">
+          <div className="w-16 h-16 rounded-full bg-surface-card border border-brand-violet/40 flex items-center justify-center mb-6 text-brand-violet">
             <IconWallet size={32} stroke={1.5} />
           </div>
           
@@ -227,7 +227,8 @@ function PortfolioPage() {
   }
 
   return (
-    <main className="flex-1 overflow-auto min-w-0">
+    <>
+      <main className="flex-1 overflow-auto min-w-0">
       <div className="mx-auto max-w-[1840px] px-5 py-5">
           <div className="mb-5 flex items-center justify-between gap-4">
             <div>
@@ -254,32 +255,36 @@ function PortfolioPage() {
                 onClick={() => toast.success("Action completed successfully", "Your recent changes have been synchronized with the cloud. You can now view the updated history in your activity log.", {
                   action: { label: "VIEW", onClick: () => alert("View clicked!") }
                 })}
-                className="h-8 px-3 rounded-[6px] border border-bullish-green/30 bg-bullish-green/5 text-[11px] font-bold text-[#00e676] hover:bg-bullish-green/10 transition-colors uppercase tracking-wider cursor-pointer"
+                className="h-8 px-3 rounded-[6px] border border-border-subtle hover:border-bullish-green bg-surface-primary text-[11px] font-semibold text-text-secondary hover:text-bullish-green hover:bg-bullish-green/5 transition-all uppercase tracking-wider cursor-pointer flex items-center gap-1.5"
               >
+                <span className="w-1.5 h-1.5 rounded-full bg-bullish-green" />
                 Trigger Success
               </button>
               <button
                 onClick={() => toast.info("New update available", "A newer version of this dataset has been detected on the server. Please refresh the page to sync with the latest version.", {
                   action: { label: "REFRESH", onClick: () => alert("Refresh clicked!") }
                 })}
-                className="h-8 px-3 rounded-[6px] border border-[#2196f3]/30 bg-[#2196f3]/5 text-[11px] font-bold text-[#2196f3] hover:bg-[#2196f3]/10 transition-colors uppercase tracking-wider cursor-pointer"
+                className="h-8 px-3 rounded-[6px] border border-border-subtle hover:border-[#2196f3] bg-surface-primary text-[11px] font-semibold text-text-secondary hover:text-[#2196f3] hover:bg-[#2196f3]/5 transition-all uppercase tracking-wider cursor-pointer flex items-center gap-1.5"
               >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#2196f3]" />
                 Trigger Info
               </button>
               <button
                 onClick={() => toast.warning("Connection is unstable", "We are having trouble reaching the primary database. Any unsaved progress may be lost if you close this browser tab.", {
                   action: { label: "RETRY", onClick: () => alert("Retry clicked!") }
                 })}
-                className="h-8 px-3 rounded-[6px] border border-[#ff9800]/30 bg-[#ff9800]/5 text-[11px] font-bold text-[#ff9800] hover:bg-[#ff9800]/10 transition-colors uppercase tracking-wider cursor-pointer"
+                className="h-8 px-3 rounded-[6px] border border-border-subtle hover:border-[#ff9800] bg-surface-primary text-[11px] font-semibold text-text-secondary hover:text-[#ff9800] hover:bg-[#ff9800]/5 transition-all uppercase tracking-wider cursor-pointer flex items-center gap-1.5"
               >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#ff9800]" />
                 Trigger Warning
               </button>
               <button
                 onClick={() => toast.error("Unable to save changes", "An unexpected error occurred during the data transfer. Please check your network and try performing the action again.", {
                   action: { label: "REPORT", onClick: () => alert("Report clicked!") }
                 })}
-                className="h-8 px-3 rounded-[6px] border border-[#ff5252]/30 bg-[#ff5252]/5 text-[11px] font-bold text-[#ff5252] hover:bg-[#ff5252]/10 transition-colors uppercase tracking-wider cursor-pointer"
+                className="h-8 px-3 rounded-[6px] border border-border-subtle hover:border-[#ff5252] bg-surface-primary text-[11px] font-semibold text-text-secondary hover:text-[#ff5252] hover:bg-[#ff5252]/5 transition-all uppercase tracking-wider cursor-pointer flex items-center gap-1.5"
               >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#ff5252]" />
                 Trigger Error
               </button>
               <button
@@ -298,8 +303,9 @@ function PortfolioPage() {
                     }
                   }, 600);
                 }}
-                className="h-8 px-3 rounded-[6px] border border-[#ffca28]/30 bg-[#ffca28]/5 text-[11px] font-bold text-[#ffca28] hover:bg-[#ffca28]/10 transition-colors uppercase tracking-wider cursor-pointer"
+                className="h-8 px-3 rounded-[6px] border border-border-subtle hover:border-[#ffca28] bg-surface-primary text-[11px] font-semibold text-text-secondary hover:text-[#ffca28] hover:bg-[#ffca28]/5 transition-all uppercase tracking-wider cursor-pointer flex items-center gap-1.5"
               >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#ffca28]" />
                 Trigger Progress
               </button>
             </div>
@@ -411,26 +417,30 @@ function PortfolioPage() {
                           <button
                             key={day}
                             className={cx(
-                              'min-h-[58px] border-b border-r border-border-subtle p-2 text-center transition-colors hover:bg-surface-card',
-                              pnl && pnl > 0 && 'bg-bullish-green/10',
-                              pnl && pnl < 0 && 'bg-bearish-red/10',
+                              'min-h-[58px] border-b border-r border-border-subtle p-2 text-center transition-all hover:bg-surface-hover relative overflow-hidden',
                               day === 18 && 'bg-surface-hover',
                             )}
                           >
                             <div className="text-[15px] font-semibold text-text-secondary">{day}</div>
                             {pnl !== undefined && (
-                              <div className={cx('mt-1 text-[11px]', pnl >= 0 ? 'text-bullish-green' : 'text-bearish-red')}>
+                              <div className={cx('mt-1 text-[11px] font-bold', pnl >= 0 ? 'text-bullish-green' : 'text-bearish-red')}>
                                 {pnl >= 0 ? '+' : '-'}${Math.abs(pnl)}
                               </div>
+                            )}
+                            {pnl !== undefined && (
+                              <div className={cx(
+                                'absolute top-0 left-0 right-0 h-[2px]',
+                                pnl >= 0 ? 'bg-bullish-green/60' : 'bg-bearish-red/60'
+                              )} />
                             )}
                           </button>
                         )
                       })}
                     </div>
                     <div className="mt-4 flex justify-center gap-5 text-[11px] text-text-quaternary">
-                      <span><span className="mr-2 inline-block h-2 w-2 bg-bearish-red/30" />Loss</span>
-                      <span><span className="mr-2 inline-block h-2 w-2 bg-bullish-green/30" />Profit</span>
-                      <span><span className="mr-2 inline-block h-2 w-2 bg-bullish-green" />Best</span>
+                      <span className="flex items-center gap-1.5"><span className="inline-block h-1 w-3 bg-bearish-red/60 rounded-full" />Loss</span>
+                      <span className="flex items-center gap-1.5"><span className="inline-block h-1 w-3 bg-bullish-green/60 rounded-full" />Profit</span>
+                      <span className="flex items-center gap-1.5"><span className="inline-block h-1.5 w-1.5 rounded-full bg-bullish-green" />Best</span>
                     </div>
                   </div>
                 ) : (
@@ -440,7 +450,7 @@ function PortfolioPage() {
                       return (
                         <div key={i} className="flex flex-1 flex-col justify-end gap-2">
                           <div
-                            className="border border-bullish-green/30 bg-bullish-green/20"
+                            className="w-full bg-bullish-green/40 border border-bullish-green/50 hover:bg-bullish-green/60 hover:border-bullish-green rounded-t-[2px] transition-all duration-200"
                             style={{ height: `${Math.max(14, value)}px` }}
                           />
                           <div className="text-center text-[9px] text-text-quaternary">{i % 4 === 0 ? i + 1 : ''}</div>
@@ -454,43 +464,87 @@ function PortfolioPage() {
           </section>
 
           <section className="mt-5 border-t border-border-subtle">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-2">
-              <div className="flex items-center gap-1 overflow-x-auto">
-                <TabButton value="positions" active={tab} onClick={setTab}>Positions</TabButton>
-                <TabButton value="activity" active={tab} onClick={setTab}>Activity</TabButton>
-                <TabButton value="copy" active={tab} onClick={setTab}>Copy Trading</TabButton>
-                <TabButton value="analytics" active={tab} onClick={setTab}>Advanced Analytics</TabButton>
-              </div>
+            {/* Tab bar — raised Combos pill floats above the border line */}
+            <div className="relative" style={{ height: 52 }}>
+              {/* The bottom border line */}
+              <div className="absolute bottom-0 left-0 right-0 border-b border-border-subtle" />
 
-              <div className="flex flex-wrap items-center gap-2 py-2">
-                <button
-                  onClick={() => setShowHistory((prev) => !prev)}
-                  className="h-8 px-3 text-[11px] font-semibold uppercase tracking-widest text-text-secondary hover:text-text-primary"
-                >
-                  {showHistory ? 'Hide history' : 'Show history'}
-                </button>
-                <select value={status} onChange={(e) => setStatus(e.target.value as PositionStatus)} className="h-8 border border-border-subtle bg-page px-3 text-[11px] uppercase tracking-widest text-text-secondary">
-                  <option value="all">Status</option>
-                  <option value="open">Open</option>
-                  <option value="settled">Settled</option>
-                </select>
-                <select value={category} onChange={(e) => setCategory(e.target.value as Category)} className="h-8 border border-border-subtle bg-page px-3 text-[11px] uppercase tracking-widest text-text-secondary">
-                  <option value="all">Category</option>
-                  <option value="binary">Binary</option>
-                  <option value="range">Range</option>
-                  <option value="leverage">Leverage</option>
-                </select>
-                <label className="flex h-8 items-center gap-2 border border-border-subtle px-3 text-text-quaternary">
-                  <IconSearch size={14} stroke={1.8} />
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search markets..."
-                    className="w-48 bg-transparent text-[12px] text-text-primary placeholder:text-text-quaternary"
-                  />
-                </label>
+              {/* Flat tabs + raised Combos, all baseline-aligned to bottom */}
+              <div className="absolute inset-0 flex items-end px-2">
+                {/* Left tabs */}
+                <TabButton value="positions" active={tab} onClick={setTab}>Positions</TabButton>
+                <TabButton value="orders" active={tab} onClick={setTab}>Orders</TabButton>
+
+                {/* Spacer + raised Combos */}
+                <div className="flex flex-1 justify-center" style={{ paddingBottom: 0 }}>
+                  <button
+                    onClick={() => setTab('combos')}
+                    className="relative flex items-center gap-2 px-6 py-2 text-[11px] font-bold uppercase tracking-widest transition-all"
+                    style={{
+                      background: tab === 'combos'
+                        ? 'linear-gradient(145deg, #807dfe, #a855f7)'
+                        : 'var(--color-surface-card)',
+                      color: tab === 'combos' ? '#fff' : '#807dfe',
+                      border: `1px solid ${tab === 'combos' ? 'rgba(128,125,254,0.6)' : 'rgba(128,125,254,0.35)'}`,
+                      borderRadius: '20px 20px 0 0',
+                      boxShadow: tab === 'combos'
+                        ? '0 -6px 24px rgba(128,125,254,0.4), 0 0 0 1px rgba(128,125,254,0.2)'
+                        : '0 -3px 12px rgba(0,0,0,0.25)',
+                      marginBottom: -1,
+                      paddingBottom: 10,
+                      paddingTop: 10,
+                    }}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full"
+                      style={{
+                        background: tab === 'combos' ? 'rgba(255,255,255,0.85)' : '#807dfe',
+                        boxShadow: tab === 'combos' ? '0 0 6px rgba(255,255,255,0.5)' : 'none',
+                      }}
+                    />
+                    Combos
+                  </button>
+                </div>
+
+                {/* Right tabs */}
+                <TabButton value="history" active={tab} onClick={setTab}>History</TabButton>
+                <TabButton value="trades" active={tab} onClick={setTab}>Trades</TabButton>
               </div>
             </div>
+
+            {tab === 'positions' && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-2 py-0">
+                <div />
+                <div className="flex flex-wrap items-center gap-2 py-2">
+                  <button
+                    onClick={() => setShowHistory((prev) => !prev)}
+                    className="h-8 px-3 text-[11px] font-semibold uppercase tracking-widest text-text-secondary hover:text-text-primary"
+                  >
+                    {showHistory ? 'Hide history' : 'Show history'}
+                  </button>
+                  <select value={status} onChange={(e) => setStatus(e.target.value as PositionStatus)} className="h-8 border border-border-subtle bg-page px-3 text-[11px] uppercase tracking-widest text-text-secondary">
+                    <option value="all">Status</option>
+                    <option value="open">Open</option>
+                    <option value="settled">Settled</option>
+                  </select>
+                  <select value={category} onChange={(e) => setCategory(e.target.value as Category)} className="h-8 border border-border-subtle bg-page px-3 text-[11px] uppercase tracking-widest text-text-secondary">
+                    <option value="all">Category</option>
+                    <option value="binary">Binary</option>
+                    <option value="range">Range</option>
+                    <option value="leverage">Leverage</option>
+                  </select>
+                  <label className="flex h-8 items-center gap-2 border border-border-subtle px-3 text-text-quaternary">
+                    <IconSearch size={14} stroke={1.8} />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search markets..."
+                      className="w-48 bg-transparent text-[12px] text-text-primary placeholder:text-text-quaternary"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
 
             {tab === 'positions' && (
               <div className="overflow-x-auto">
@@ -529,7 +583,44 @@ function PortfolioPage() {
               </div>
             )}
 
-            {tab === 'activity' && (
+            {tab === 'orders' && (
+              <EmptyState title="No open orders" body="Pending keeper orders and limit entries will appear here." />
+            )}
+
+            {tab === 'combos' && (
+              <div className="p-6">
+                <div className="mb-4 flex items-center gap-3">
+                  <div
+                    className="flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-widest"
+                    style={{ background: 'linear-gradient(135deg, #807dfe22, #a855f722)', color: '#a6a3ff', border: '1px solid rgba(128,125,254,0.3)' }}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#807dfe]" />
+                    Combos
+                  </div>
+                  <span className="text-[12px] text-text-quaternary">Multi-leg positions across epochs</span>
+                </div>
+                <div className="grid divide-y divide-border-subtle border border-border-subtle rounded-[8px] overflow-hidden">
+                  {activity.map((item) => (
+                    <div key={`${item.event}-${item.time}`} className="grid grid-cols-[minmax(0,1fr)_120px_80px_120px] items-center gap-4 px-4 py-3.5 hover:bg-surface-card/40 transition-colors max-[780px]:grid-cols-1">
+                      <div>
+                        <div className="text-[13px] font-semibold text-text-primary">{item.market}</div>
+                        <div className="mt-0.5 text-[11px] text-text-quaternary">{item.event}</div>
+                      </div>
+                      <div className="text-[12px] font-semibold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>{item.value}</div>
+                      <div
+                        className="text-[11px] font-bold px-2 py-0.5 rounded-full text-center"
+                        style={{ background: 'rgba(11,153,129,0.15)', color: '#0b9981' }}
+                      >
+                        +12%
+                      </div>
+                      <div className="text-[11px] text-text-quaternary">{item.time}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === 'history' && (
               <div className="grid divide-y divide-border-subtle">
                 {activity.map((item) => (
                   <div key={`${item.event}-${item.time}`} className="grid grid-cols-[180px_minmax(0,1fr)_120px_100px] gap-4 px-4 py-4 max-[780px]:grid-cols-1">
@@ -542,48 +633,7 @@ function PortfolioPage() {
               </div>
             )}
 
-            {tab === 'copy' && (
-              <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-4 p-4 max-[980px]:grid-cols-1">
-                <div className="grid gap-3">
-                  {copyLeaders.map((leader) => (
-                    <button key={leader.name} className="grid grid-cols-[minmax(0,1fr)_100px_90px_90px] items-center gap-4 border border-border-subtle bg-surface-primary px-4 py-4 text-left hover:border-border-default max-[780px]:grid-cols-1">
-                      <div>
-                        <div className="font-bold text-text-primary">{leader.name}</div>
-                        <div className="mt-1 text-[11px] uppercase tracking-widest text-text-quaternary">{leader.mode}</div>
-                      </div>
-                      <div className="text-text-tertiary">{leader.followers} followers</div>
-                      <div className="font-bold text-bullish-green">{leader.thirtyDay}</div>
-                      <div className="text-text-tertiary">{leader.risk}</div>
-                    </button>
-                  ))}
-                </div>
-                <div className="border border-border-subtle bg-surface-primary p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[13px] font-bold text-text-primary">Copy guardrails</div>
-                      <div className="mt-1 text-[11px] text-text-quaternary">Policy enforced before keeper execution.</div>
-                    </div>
-                    <Toggle checked={copyEnabled} onChange={() => setCopyEnabled((prev) => !prev)} />
-                  </div>
-                  <label className="mt-5 block text-[11px] uppercase tracking-widest text-text-quaternary">
-                    Max account risk
-                    <input
-                      value={riskLimit}
-                      onChange={(e) => setRiskLimit(e.target.value)}
-                      className="mt-2 h-9 w-full border border-border-subtle bg-page px-3 text-[13px] text-text-primary"
-                    />
-                  </label>
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-text-tertiary">
-                    <div className="border border-border-subtle p-3">Per trade cap<br /><span className="text-text-primary">$500</span></div>
-                    <div className="border border-border-subtle p-3">Leverage cap<br /><span className="text-text-primary">3.0x</span></div>
-                    <div className="border border-border-subtle p-3">Allowed market<br /><span className="text-text-primary">BTC</span></div>
-                    <div className="border border-border-subtle p-3">Slippage<br /><span className="text-text-primary">1.2%</span></div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {tab === 'analytics' && (
+            {tab === 'trades' && (
               <div className="grid grid-cols-4 gap-px bg-border-subtle max-[980px]:grid-cols-2 max-[620px]:grid-cols-1">
                 {[
                   ['Sharpe proxy', '1.84', 'PnL volatility normalized'],
@@ -606,7 +656,8 @@ function PortfolioPage() {
         </div>
       </main>
       <OnboardingModal open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
-    )
+    </>
+  )
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {

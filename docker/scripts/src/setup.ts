@@ -25,23 +25,31 @@ async function exec(c: SuiClient, tx: Transaction, kp: Ed25519Keypair, label: st
   // No setGasBudget: let the SDK auto-estimate via dry-run. create_oracle builds
   // a ~196-page dense strike matrix whose cost a fixed budget under-provisions;
   // the canonical Mysten scripts rely on auto-estimation here for the same reason.
-  let r: Awaited<ReturnType<SuiClient["signAndExecuteTransaction"]>>;
-  try {
-    r = await c.signAndExecuteTransaction({
-      transaction: tx,
-      signer: kp,
-      options: { showEffects: true, showObjectChanges: true, showEvents: true },
-    });
-  } catch (err) {
-    throw new Error(`${label} RPC failed: ${formatError(err)}`);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let r: Awaited<ReturnType<SuiClient["signAndExecuteTransaction"]>>;
+    try {
+      r = await c.signAndExecuteTransaction({
+        transaction: tx,
+        signer: kp,
+        options: { showEffects: true, showObjectChanges: true, showEvents: true },
+      });
+    } catch (err) {
+      const msg = String((err as any)?.message ?? err);
+      const retriable = msg.includes('needs to be rebuilt') || msg.includes('Internal error');
+      if (attempt < 2 && retriable) {
+        await new Promise((res) => setTimeout(res, 3000));
+        continue;
+      }
+      throw new Error(`${label} RPC failed: ${formatError(err)}`);
+    }
+    if (r!.effects?.status.status !== "success") {
+      throw new Error(`${label} failed: ${JSON.stringify(r!.effects?.status)}`);
+    }
+    await c.waitForTransaction({ digest: r!.digest });
+    await new Promise((res) => setTimeout(res, 1500));
+    return r!;
   }
-  if (r.effects?.status.status !== "success") {
-    throw new Error(`${label} failed: ${JSON.stringify(r.effects?.status)}`);
-  }
-  // Block until the fullnode has indexed this tx, so the next tx can read its
-  // outputs (objects created here) without a read-after-write race.
-  await c.waitForTransaction({ digest: r.digest });
-  return r;
+  throw new Error(`${label}: unreachable`);
 }
 
 function formatError(err: unknown): string {
@@ -318,6 +326,62 @@ async function main() {
     m.leverageSeeded = "true";
     saveManifest(m);
     console.log(`margin pool ${m.marginPoolId} + book ${m.leverageBookId}, seeded ${seed / DUSDC_SCALE} dUSDC`);
+  }
+
+  // 8. Windows: create a WindowBook and seed it with LP liquidity.
+  //    The keeper creates a fresh Predict oracle per epoch (60s expiry each),
+  //    so the book itself needs no oracle cap — it's a pure price-taker.
+  if (!m.windowBookId) {
+    const cerida = need(m, "ceridaPkg");
+
+    // Step A: create the WindowBook (no oracle cap required).
+    const txA = new Transaction();
+    txA.moveCall({
+      target: `${cerida}::windows::create_and_share`,
+      typeArguments: [dusdcType],
+      arguments: [
+        txA.pure.u64(4n),   // 4 bands → 5 strikes
+        txA.pure.u64(50n),  // 50 bps spread
+        txA.pure.u64(10n),  // 10 bps skew alpha
+      ],
+    });
+    const rA = await exec(c, txA, kp, "create window book");
+    const windowBookId = created(rA, "::windows::WindowBook");
+    console.log("window book =", windowBookId);
+
+    // Step B: create a keeper OracleSVICap (held by deployer; used per epoch).
+    //   The keeper needs this cap to create + activate + feed per-epoch oracles.
+    const predictPkg = need(m, "predictPkg");
+    const txB = new Transaction();
+    const [keeperCap] = txB.moveCall({
+      target: `${predictPkg}::registry::create_oracle_cap`,
+      arguments: [txB.object(need(m, "adminCap"))],
+    });
+    txB.transferObjects([keeperCap], txB.pure.address(addr));
+    const rB = await exec(c, txB, kp, "create keeper oracle cap");
+    const keeperOracleCapId = created(rB, "::oracle::OracleSVICap");
+    console.log("keeper oracle cap =", keeperOracleCapId);
+
+    // Step C: seed the window book with LP liquidity.
+    const wSeed = 100_000n * DUSDC_SCALE;
+    const txC = new Transaction();
+    const [wDusdc] = txC.moveCall({
+      target: "0x2::coin::mint",
+      typeArguments: [dusdcType],
+      arguments: [txC.object(need(m, "dusdcCap")), txC.pure.u64(wSeed)],
+    });
+    const [lpShare] = txC.moveCall({
+      target: `${cerida}::windows::supply`,
+      typeArguments: [dusdcType],
+      arguments: [txC.object(windowBookId), wDusdc],
+    });
+    txC.transferObjects([lpShare], txC.pure.address(addr));
+    await exec(c, txC, kp, "seed window book");
+
+    m.windowBookId = windowBookId;
+    m.keeperOracleCapId = keeperOracleCapId;
+    saveManifest(m);
+    console.log(`window book ${windowBookId} seeded with ${wSeed / DUSDC_SCALE} dUSDC`);
   }
 
   console.log("\nsetup complete:\n", JSON.stringify(m, null, 2));

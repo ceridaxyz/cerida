@@ -9,6 +9,7 @@ import { IconX, IconPlus } from '@tabler/icons-react';
 import TopNav from '../../components/market/top-nav';
 import { ComboProvider, useComboDispatch } from '../../components/market/combo-context';
 import ComboTray from '../../components/market/combo-tray';
+import { LevelsProvider } from '../../components/market/levels-context';
 
 export const meta = () => [{ title: 'Trade — Cerida' }];
 
@@ -564,10 +565,12 @@ function TopNavWithCombo({ addOptions, onAddWidget }: { addOptions: { type: stri
 }
 
 const TradePage = () => (
-  <ComboProvider>
-    <TradePageInner />
-    <ComboTray />
-  </ComboProvider>
+  <LevelsProvider>
+    <ComboProvider>
+      <TradePageInner />
+      <ComboTray />
+    </ComboProvider>
+  </LevelsProvider>
 );
 
 export default TradePage;

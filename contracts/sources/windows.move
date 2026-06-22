@@ -33,8 +33,7 @@
 module cerida::windows;
 
 use deepbook_predict::{
-    i64,
-    oracle::{Self, OracleSVI, OracleSVICap, SVIParams, PriceData},
+    oracle::{Self, OracleSVI},
     predict::{Self, Predict},
     range_key,
 };
@@ -71,7 +70,6 @@ const EZeroShares: u64 = 10;
 
 public struct WindowBook<phantom Quote> has key {
     id: UID,
-    oracle_cap: OracleSVICap,
     band_count: u64,
     spread_bps: u64,
     skew_alpha_bps: u64,
@@ -160,7 +158,6 @@ public struct PayoutClaimed has copy, drop {
 // ── Creation ──────────────────────────────────────────────────────────────────
 
 public fun create_window_book<Quote>(
-    oracle_cap: OracleSVICap,
     band_count: u64,
     spread_bps: u64,
     skew_alpha_bps: u64,
@@ -168,7 +165,6 @@ public fun create_window_book<Quote>(
 ): WindowBook<Quote> {
     WindowBook {
         id: object::new(ctx),
-        oracle_cap,
         band_count,
         spread_bps,
         skew_alpha_bps,
@@ -180,36 +176,15 @@ public fun create_window_book<Quote>(
 }
 
 public fun create_and_share<Quote>(
-    oracle_cap: OracleSVICap,
     band_count: u64,
     spread_bps: u64,
     skew_alpha_bps: u64,
     ctx: &mut TxContext,
 ): ID {
-    let book = create_window_book<Quote>(oracle_cap, band_count, spread_bps, skew_alpha_bps, ctx);
+    let book = create_window_book<Quote>(band_count, spread_bps, skew_alpha_bps, ctx);
     let id = object::id(&book);
     sui::transfer::share_object(book);
     id
-}
-
-// ── Oracle feeding ────────────────────────────────────────────────────────────
-
-public fun feed_prices<Quote>(
-    book: &WindowBook<Quote>,
-    oracle: &mut OracleSVI,
-    prices: PriceData,
-    clock: &Clock,
-) {
-    oracle::update_prices(oracle, &book.oracle_cap, prices, clock);
-}
-
-public fun feed_svi<Quote>(
-    book: &WindowBook<Quote>,
-    oracle: &mut OracleSVI,
-    svi: SVIParams,
-    clock: &Clock,
-) {
-    oracle::update_svi(oracle, &book.oracle_cap, svi, clock);
 }
 
 // ── Epoch rolling ─────────────────────────────────────────────────────────────

@@ -11,6 +11,10 @@ const KIND_PREDICT_RANGE: u8 = 1;
 const KIND_LEVERAGE_BINARY: u8 = 2;
 const KIND_LEVERAGE_RANGE: u8 = 3;
 const KIND_WINDOW_BET: u8 = 4;
+// KIND_COMBO legs reuse KIND_PREDICT_BINARY / KIND_PREDICT_RANGE intents;
+// the combo_id is stored separately in the vault's dynamic combo table.
+#[allow(unused_const)]
+const KIND_COMBO: u8 = 5;
 
 public struct Intent has store {
     kind: u8,
@@ -49,6 +53,10 @@ public fun qty(intent: &Intent): u64 {
 
 public fun is_range(intent: &Intent): bool {
     intent.kind == KIND_PREDICT_RANGE || intent.kind == KIND_LEVERAGE_RANGE
+}
+
+public fun is_leverage(intent: &Intent): bool {
+    intent.kind == KIND_LEVERAGE_BINARY || intent.kind == KIND_LEVERAGE_RANGE
 }
 
 // === Predict/Leverage shared getters ===
@@ -123,15 +131,17 @@ public fun band_idx(intent: &Intent): u64 {
 public(package) fun new_predict_binary(
     user: address, oracle_id: ID, expiry: u64,
     strike: u64, is_up: bool, qty: u64, escrowed: u64, max_cost: u64,
+    tp_value: u64, sl_value: u64,
 ): Intent {
-    new_intent(KIND_PREDICT_BINARY, user, oracle_id, expiry, strike, is_up, 0, 0, qty, escrowed, max_cost, 0, 0, 0, 0, 0)
+    new_intent(KIND_PREDICT_BINARY, user, oracle_id, expiry, strike, is_up, 0, 0, qty, escrowed, max_cost, 0, tp_value, sl_value, 0, 0)
 }
 
 public(package) fun new_predict_range(
     user: address, oracle_id: ID, expiry: u64,
     lower: u64, higher: u64, qty: u64, escrowed: u64, max_cost: u64,
+    tp_value: u64, sl_value: u64,
 ): Intent {
-    new_intent(KIND_PREDICT_RANGE, user, oracle_id, expiry, 0, false, lower, higher, qty, escrowed, max_cost, 0, 0, 0, 0, 0)
+    new_intent(KIND_PREDICT_RANGE, user, oracle_id, expiry, 0, false, lower, higher, qty, escrowed, max_cost, 0, tp_value, sl_value, 0, 0)
 }
 
 public(package) fun new_leverage_binary(

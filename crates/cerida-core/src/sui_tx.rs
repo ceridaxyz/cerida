@@ -185,7 +185,7 @@ fn split_type_params(s: &str) -> Vec<String> {
 
 // ── PTB arguments ────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Argument {
     /// The gas coin object.
     GasCoin,
@@ -299,6 +299,55 @@ impl PtbBuilder {
         let idx = self.inputs.len() as u16;
         self.inputs.push(CallArg::Pure(bcs::to_bytes(&v).unwrap()));
         Argument::Input(idx)
+    }
+
+    /// Add an owned (or immutable) object input — used for AdminCap, OracleSVICap, etc.
+    pub fn owned(&mut self, id: ObjectID, version: SequenceNumber, digest: ObjectDigest) -> Argument {
+        let idx = self.inputs.len() as u16;
+        self.inputs.push(CallArg::Object(ObjectArg::ImmOrOwnedObject((id, version, digest))));
+        Argument::Input(idx)
+    }
+
+    /// Add a pure UTF-8 string (BCS: ULEB128 length + bytes).
+    pub fn pure_string(&mut self, s: &str) -> Argument {
+        let idx = self.inputs.len() as u16;
+        self.inputs.push(CallArg::Pure(bcs::to_bytes(s).unwrap()));
+        Argument::Input(idx)
+    }
+
+    /// Add a Move `ID` (= `address`) input — BCS-encoded as 32 raw bytes.
+    pub fn pure_address(&mut self, bytes: [u8; 32]) -> Argument {
+        let idx = self.inputs.len() as u16;
+        self.inputs.push(CallArg::Pure(bytes.to_vec()));
+        Argument::Input(idx)
+    }
+
+    /// Add a Move `vector<u64>` input (BCS: ULEB128 length + LE u64 values).
+    pub fn pure_u64_vec(&mut self, v: &[u64]) -> Argument {
+        let idx = self.inputs.len() as u16;
+        self.inputs.push(CallArg::Pure(bcs::to_bytes(v).unwrap()));
+        Argument::Input(idx)
+    }
+
+    /// Append a MoveCall and return `Result(cmd_index)` so the output can be
+    /// passed as an argument to a subsequent command in the same PTB.
+    pub fn move_call_result(
+        &mut self,
+        package: ObjectID,
+        module: &str,
+        function: &str,
+        type_arguments: Vec<TypeTag>,
+        arguments: Vec<Argument>,
+    ) -> Argument {
+        let cmd_idx = self.commands.len() as u16;
+        self.commands.push(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package,
+            module: Identifier(module.to_string()),
+            function: Identifier(function.to_string()),
+            type_arguments,
+            arguments,
+        })));
+        Argument::Result(cmd_idx)
     }
 
     /// Append a MoveCall command.

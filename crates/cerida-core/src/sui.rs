@@ -151,6 +151,31 @@ impl SuiRpcClient {
         Ok(SharedObjectInfo { id, version, initial_shared_version })
     }
 
+    /// Fetch full transaction effects (including events) by digest.
+    pub async fn get_tx_effects(&self, digest: &str) -> Result<Value> {
+        let params = json!([digest, { "showEvents": true, "showEffects": true }]);
+        let resp: Value = self.rpc("sui_getTransactionBlock", params).await?;
+        Ok(resp)
+    }
+
+    /// Fetch (object_id, version, digest) for an OWNED object — used to build
+    /// `ImmOrOwnedObject` PTB inputs (admin_cap, oracle_cap, etc.).
+    pub async fn get_object_ref(&self, object_id: &str) -> Result<(String, u64, String)> {
+        let params = json!([object_id, { "showOwner": false }]);
+        let resp: Value = self.rpc("sui_getObject", params).await?;
+        let obj = resp.get("data").context("no data in getObject")?;
+        let version: u64 = obj
+            .pointer("/version")
+            .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
+            .context("no version in getObject")?;
+        let digest = obj
+            .pointer("/digest")
+            .and_then(Value::as_str)
+            .context("no digest in getObject")?
+            .to_string();
+        Ok((object_id.to_string(), version, digest))
+    }
+
     /// Dry-run a base64-encoded BCS transaction.
     pub async fn dry_run_transaction(&self, tx_bytes_b64: &str) -> Result<DryRunResult> {
         let result: DryRunResult = self

@@ -43,14 +43,14 @@ const Toggle = ({ checked, onChange }: { checked: boolean; onChange: () => void 
     onClick={onChange}
     className={cx(
       'h-5 w-9 rounded-pill border p-0.5 transition-colors',
-      checked ? 'border-bullish-green bg-bullish-green/20' : 'border-border-default bg-surface-card',
+      checked ? 'border-bullish-green bg-bullish-green' : 'border-border-default bg-surface-card',
     )}
     aria-pressed={checked}
   >
     <span
       className={cx(
-        'block h-3.5 w-3.5 rounded-pill transition-transform',
-        checked ? 'translate-x-4 bg-bullish-green' : 'translate-x-0 bg-text-quaternary',
+        'block h-3.5 w-3.5 rounded-pill transition-transform bg-white',
+        checked ? 'translate-x-4' : 'translate-x-0',
       )}
     />
   </button>
@@ -284,16 +284,19 @@ function SettingsBody() {
               ))}
             </div>
 
-            <div className="mt-6 border border-bearish-red/30 bg-bearish-red/5 p-5">
-              <div className="text-[13px] font-bold text-bearish-red">Account danger zone</div>
+            <div className="mt-6 border border-border-subtle bg-surface-primary p-5 rounded-[8px]">
+              <div className="text-[13px] font-bold text-bearish-red flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-bearish-red" />
+                Account danger zone
+              </div>
               <div className="mt-2 max-w-2xl text-[12px] text-text-quaternary">
                 These controls are inert mock actions for now, but this is where disconnect wallet, revoke copy permissions, and wipe local cache will live.
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                <button className="h-9 border border-bearish-red/40 px-3 text-[11px] uppercase tracking-widest text-bearish-red hover:bg-bearish-red/10">
+                <button className="h-9 border border-bearish-red/30 hover:border-bearish-red rounded-[6px] bg-surface-card px-3 text-[11px] font-semibold uppercase tracking-widest text-bearish-red hover:bg-bearish-red/5 transition-all cursor-pointer">
                   Disconnect wallet
                 </button>
-                <button className="h-9 border border-bearish-red/40 px-3 text-[11px] uppercase tracking-widest text-bearish-red hover:bg-bearish-red/10">
+                <button className="h-9 border border-bearish-red/30 hover:border-bearish-red rounded-[6px] bg-surface-card px-3 text-[11px] font-semibold uppercase tracking-widest text-bearish-red hover:bg-bearish-red/5 transition-all cursor-pointer">
                   Revoke copy vaults
                 </button>
               </div>

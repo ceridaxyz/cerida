@@ -81,6 +81,7 @@ const EConditionNotMet: u64 = 11;
 const EOrderExpired: u64 = 12;
 /// Ask hasn't crossed the limit basis — condition not met.
 const ELimitNotCrossed: u64 = 13;
+const ELockedInCombo:   u64 = 14;
 
 // === Events ===
 
@@ -215,6 +216,8 @@ public struct Ticket<phantom Quote> has store {
     // conditional exits (0 = not set)
     tp_value: u64,
     sl_value: u64,
+    // set to true while this ticket is part of an active combo
+    locked: bool,
 }
 
 /// Holds resting limit-entry orders with sealed escrow. An order fills
@@ -530,6 +533,7 @@ public(package) fun open_ticket<Quote>(
         opened_at: clock.timestamp_ms(),
         tp_value,
         sl_value,
+        locked: false,
     });
     event::emit(TicketOpened {
         book_id: object::id(book),
@@ -567,6 +571,64 @@ public fun set_tp_sl<Quote>(
     pos.tp_value = tp_value;
     pos.sl_value = sl_value;
     event::emit(TpSlUpdated { book_id, position_id, tp_value, sl_value });
+}
+
+// === Combo integration ===
+
+/// Package-only: lock a ticket so the owner cannot close it independently.
+/// Called by vault::request_combo_with_leverage when the ticket joins a combo.
+public(package) fun lock_for_combo<Quote>(
+    book: &mut LeverageBook<Quote>,
+    position_id: u64,
+    caller: address,
+) {
+    let pos = &mut book.positions[position_id];
+    assert!(pos.owner == caller, ENotOwner);
+    pos.locked = true;
+}
+
+/// Package-only: settle a combo-locked ticket and return the equity paid to owner.
+/// Mirrors `settle` but is callable by the vault on behalf of the combo keeper.
+/// Funds flow: insurance/perf fees → pool; equity → owner (transferred here).
+/// Returns `to_owner` so the vault can record it in combo.record_settlement.
+public(package) fun settle_for_combo<Quote>(
+    pool: &mut MarginPool<Quote>,
+    book: &mut LeverageBook<Quote>,
+    predict: &Predict,
+    oracle: &OracleSVI,
+    position_id: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): u64 {
+    let pos = &book.positions[position_id];
+    let value = ticket_value(pos, predict, oracle, clock);
+    let Ticket {
+        owner, mut funds, margin, basis, reserved,
+        qty: _, oracle_id: _, expiry: _, is_range: _, strike: _, is_up: _,
+        lower: _, higher: _, maint_bps: _, opened_at: _, tp_value: _, sl_value: _, locked: _,
+    } = book.positions.remove(position_id);
+    let book_id = object::id(book);
+    let (to_owner, to_insurance) =
+        settle_amounts(margin, basis, reserved, value, pool.perf_bps, pool.penalty_bps, false);
+    let equity = to_owner + to_insurance;
+    if (to_owner > 0) {
+        transfer::public_transfer(funds.split(to_owner).into_coin(ctx), owner);
+    };
+    if (to_insurance > 0) { pool.insurance.join(funds.split(to_insurance)); };
+    let returned = funds.value();
+    release(pool, reserved, funds);
+    event::emit(TicketClosed {
+        book_id,
+        position_id,
+        owner,
+        value,
+        equity,
+        to_owner,
+        to_insurance,
+        returned_to_pool: returned,
+        liquidated: false,
+    });
+    to_owner
 }
 
 /// Permissionless take-profit execution. Fires when live bid·qty >= ticket.tp_value.
@@ -817,7 +879,9 @@ public fun close<Quote>(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    assert!(book.positions[position_id].owner == ctx.sender(), ENotOwner);
+    let pos = &book.positions[position_id];
+    assert!(pos.owner == ctx.sender(), ENotOwner);
+    assert!(!pos.locked, ELockedInCombo);
     settle(pool, book, predict, oracle, position_id, false, clock, ctx);
 }
 
@@ -888,7 +952,7 @@ public(package) fun settle<Quote>(
     let Ticket {
         owner, mut funds, margin, basis, reserved, qty: _, oracle_id: _, expiry: _,
         is_range: _, strike: _, is_up: _, lower: _, higher: _, maint_bps: _, opened_at: _,
-        tp_value: _, sl_value: _,
+        tp_value: _, sl_value: _, locked: _,
     } = book.positions.remove(position_id);
 
     let (to_owner, to_insurance) =

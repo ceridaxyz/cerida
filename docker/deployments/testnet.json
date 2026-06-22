@@ -1,0 +1,12 @@
+{
+  "managerId": "0xcf98c1b77646df048734420daa79bbf889973e6f4f9a9d90d2cd737770445bcb",
+  "ceridaPkg": "0xd2f87c454c3af8d17d7c5de7c80ea3690d6f4a85cbda6b9450d4c119bcd21725",
+  "vaultId": "0xaaec7c2127409edf281e7d8dd3a3c49d0754ae983c0c042991d23727fd3c5615",
+  "poolId": "0x4296729733e7e731afa6bd1cf853a40a55e59446138fcd0ab31091bdc37d34cb",
+  "bookId": "0x422c7e55437af046c9ee30521f1fe9014705bd66f4b188725201d61f276d10b7",
+  "windowBookId": "0xce81ddd95598b85a18d66431f2e47d24d10eb2ba2e13eefbbd43cf6e1f5d7df3",
+  "windowEpochId": 0,
+  "windowBetTicketId": "0xd2d3015e7f3f9e3f726a9e7c015da06e441354fc923d4d155d3684f95c604c0b",
+  "windowEpochExpiry": 1782088200000,
+  "windowOracleId": "0xe974888dfc3f6177bbc12ba639914a0fb73c4c388aa1e4e647373d33fcadd199"
+}

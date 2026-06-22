@@ -156,3 +156,9 @@ public(package) fun burn(token: PositionToken) {
     let PositionToken { id, .. } = token;
     id.delete();
 }
+
+/// Burn a token held inside a combo entry (called by combo::destroy_entry).
+public(package) fun burn_for_combo(token: PositionToken) {
+    let PositionToken { id, .. } = token;
+    id.delete();
+}

@@ -8,10 +8,13 @@
     "deploy": "bun src/deploy.ts",
     "setup": "bun src/setup.ts",
     "flow": "bun src/flow.ts",
+    "combo": "bun src/combo-flow.ts",
     "settlement": "bun src/settlement-flow.ts",
     "range-grid": "bun src/range-grid-flow.ts",
     "limit-order": "bun src/limit-order-flow.ts",
-    "all": "bun src/deploy.ts && bun src/setup.ts && bun src/flow.ts"
+    "all": "bun src/deploy.ts && bun src/setup.ts && bun src/flow.ts && bun src/combo-flow.ts",
+    "testnet-deploy": "bun src/testnet/deploy.ts",
+    "testnet": "bun src/testnet/flow.ts"
   },
   "dependencies": {
     "@mysten/sui": "^1.18.0"

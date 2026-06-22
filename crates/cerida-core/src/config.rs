@@ -32,6 +32,25 @@ pub struct Config {
     pub leverage_book_id: Option<String>,
     /// The shared `WindowBook` object ID.
     pub window_book_id: Option<String>,
+    /// Duration of each window epoch in milliseconds (default 60 000 = 1 minute).
+    pub window_epoch_ms: u64,
+    /// How many seconds before an epoch ends to schedule the next roll (default 10).
+    pub window_epoch_lead_secs: i64,
+    // ── Predict protocol objects (needed for oracle creation per epoch) ────────
+    /// Predict package ID (DeepBook Predict).
+    pub predict_package_id: Option<String>,
+    /// Shared Predict Registry object ID.
+    pub registry_id: Option<String>,
+    /// Owned AdminCap object ID held by the keeper.
+    pub admin_cap_id: Option<String>,
+    /// Owned OracleSVICap object ID held by the keeper (for creating + activating oracles).
+    pub keeper_oracle_cap_id: Option<String>,
+    /// Default strike grid: min strike (e.g. 50_000 * 1e9 for BTC at $50k floor).
+    pub window_min_strike: u64,
+    /// Tick size for the oracle strike grid (e.g. 1_000_000_000 = $1 in 9-decimal price).
+    pub window_tick_size: u64,
+    /// Default strikes vector as JSON (e.g. "[60000000000000,61500000000000,...]").
+    pub window_default_strikes: Option<String>,
     /// Move type string for the vault's Quote coin, e.g. `0x2::sui::SUI`.
     pub quote_coin_type: String,
 }
@@ -69,6 +88,27 @@ impl Config {
             margin_pool_id: env::var("MARGIN_POOL_ID").ok().filter(|v| !v.is_empty()),
             leverage_book_id: env::var("LEVERAGE_BOOK_ID").ok().filter(|v| !v.is_empty()),
             window_book_id: env::var("WINDOW_BOOK_ID").ok().filter(|v| !v.is_empty()),
+            window_epoch_ms: env::var("WINDOW_EPOCH_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60_000),
+            window_epoch_lead_secs: env::var("WINDOW_EPOCH_LEAD_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            predict_package_id: env::var("PREDICT_PACKAGE_ID").ok().filter(|v| !v.is_empty()),
+            registry_id: env::var("REGISTRY_ID").ok().filter(|v| !v.is_empty()),
+            admin_cap_id: env::var("ADMIN_CAP_ID").ok().filter(|v| !v.is_empty()),
+            keeper_oracle_cap_id: env::var("KEEPER_ORACLE_CAP_ID").ok().filter(|v| !v.is_empty()),
+            window_min_strike: env::var("WINDOW_MIN_STRIKE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50_000_000_000_000), // $50,000 in 9-decimal price
+            window_tick_size: env::var("WINDOW_TICK_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1_000_000_000), // $1 tick
+            window_default_strikes: env::var("WINDOW_DEFAULT_STRIKES").ok().filter(|v| !v.is_empty()),
             quote_coin_type: env::var("QUOTE_COIN_TYPE")
                 .unwrap_or_else(|_| "0x2::sui::SUI".into()),
         }

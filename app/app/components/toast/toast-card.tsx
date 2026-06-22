@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import {
   IconCircleCheckFilled,
   IconInfoCircleFilled,
-  IconTriangleAlertFilled,
+  IconAlertTriangleFilled,
   IconAlertCircleFilled,
   IconHourglass,
   IconX,
@@ -39,7 +39,7 @@ export function ToastCard({ toast, onClose }: ToastCardProps) {
         }
       case 'warning':
         return {
-          icon: <IconTriangleAlertFilled size={18} className="text-[#ff9800]" />,
+          icon: <IconAlertTriangleFilled size={18} className="text-[#ff9800]" />,
           titleColor: 'text-[#ff9800]',
         }
       case 'error':
