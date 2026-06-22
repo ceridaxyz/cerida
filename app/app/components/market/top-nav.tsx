@@ -25,6 +25,10 @@ import { useQuery } from '@tanstack/react-query'
 import OnboardingModal from '../onboarding-modal'
 import { getActiveLadder, type Market } from '../../lib/cerida-api'
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fmtPrice = (p: number) =>
+  p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 // ── Asset catalogue (only BTC live; others disabled) ─────────────────────────
 const ASSETS = [
   {
@@ -116,6 +120,9 @@ const TopNav = ({ addOptions = [], onAddWidget, onComboOpen, comboActive }: TopN
     staleTime: 30_000,
   })
   const activeMarket = selectedMarket ?? ladder?.[0] ?? null
+  const btcMarket = ladder?.find(m => m.asset === 'BTC') ?? null
+  const btcSpot = btcMarket?.spot ?? null
+  const btcBullish = btcMarket ? btcMarket.forward >= btcMarket.spot : true
 
   const account = useCurrentAccount()
   const { mutate: disconnect } = useDisconnectWallet()
@@ -263,10 +270,10 @@ useEffect(() => {
                             </div>
                             {/* Price */}
                             <span className="text-[13px] font-medium text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-                              ${asset.price}
+                              ${asset.id === 'btc' && btcSpot ? fmtPrice(btcSpot) : asset.price}
                             </span>
                             {/* Change */}
-                            <span className={`text-[12px] font-semibold ${asset.positive ? 'text-bullish-green' : 'text-bearish-red'}`}
+                            <span className={`text-[12px] font-semibold ${asset.id === 'btc' ? (btcBullish ? 'text-bullish-green' : 'text-bearish-red') : asset.positive ? 'text-bullish-green' : 'text-bearish-red'}`}
                               style={{ fontFamily: 'var(--font-mono)' }}>
                               {asset.change}
                             </span>
@@ -361,18 +368,18 @@ useEffect(() => {
         {/* Stats */}
         <div className="flex items-center gap-6 min-w-0 overflow-hidden px-1">
           <Stat label="Last price">
-            <span className="text-bearish-red">63,347.1</span>
+            <span className={btcBullish ? 'text-bullish-green' : 'text-bearish-red'}>
+              {btcSpot ? fmtPrice(btcSpot) : '—'}
+            </span>
             <span className="text-text-tertiary text-[11px] ml-1">USD</span>
           </Stat>
-          <Stat label="24h change">
-            <span className="text-bullish-green">0.95%</span>
-          </Stat>
-          <Stat label="24h volume">
-            <span className="text-text-primary">1.47K</span>
-            <span className="text-text-tertiary text-[11px] ml-1">BTC</span>
-            <span className="text-text-primary ml-2">93.2M</span>
-            <span className="text-text-tertiary text-[11px] ml-1">USD</span>
-          </Stat>
+          {activeMarket && (
+            <Stat label="Expiry">
+              <span className="text-text-primary">
+                {new Date(activeMarket.expiry).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </Stat>
+          )}
         </div>
 
         {/* Right side */}
