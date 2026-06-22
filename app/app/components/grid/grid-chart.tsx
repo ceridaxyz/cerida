@@ -10,7 +10,7 @@ const PAD_L = 8;
 const PAD_R = 54;
 
 const SECONDS_PER_YEAR = 365 * 24 * 60 * 60;
-const EPOCH_MS = 60_000;
+const EPOCH_MS = 15 * 60_000;
 const WIN_PAST = 4 * EPOCH_MS;
 const CANDLE_MS = 4_500;
 

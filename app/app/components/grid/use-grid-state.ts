@@ -123,12 +123,14 @@ export function useGridState(): GridState {
           .sort((a, b) => b.expiry - a.expiry)
           .slice(0, 4);
 
-        const nearest = active[0];
-        if (!nearest) { setLive(l => ({ ...l, active, settled })); setNow(Date.now()); return; }
+        // Use soonest future-expiry oracle for live price; stale ones have no fresh prices.
+        const now = Date.now();
+        const pricingOracle = active.find(o => o.expiry > now) ?? active[0];
+        if (!pricingOracle) { setLive(l => ({ ...l, active, settled })); setNow(Date.now()); return; }
 
         const [price, svi] = await Promise.all([
-          getLatestPrice(nearest.oracle_id),
-          getLatestSvi(nearest.oracle_id).catch(() => null),
+          getLatestPrice(pricingOracle.oracle_id),
+          getLatestSvi(pricingOracle.oracle_id).catch(() => null),
         ]);
 
         setLive(prev => ({
@@ -139,7 +141,7 @@ export function useGridState(): GridState {
 
         if (!histFetched.current) {
           histFetched.current = true;
-          getPriceHistory(nearest.oracle_id, HISTORY_LIMIT)
+          getPriceHistory(pricingOracle.oracle_id, HISTORY_LIMIT)
             .then(pts => setLive(l => ({ ...l, history: pts.map(p => ({ t: p.t, price: p.spot })) })))
             .catch(() => {});
         }
@@ -178,11 +180,12 @@ export function useGridState(): GridState {
 
   // ── Bands ────────────────────────────────────────────────────────────────────
   const { strikes, bands } = useMemo(() => {
-    const nearest = live.active[0];
+    const now = Date.now();
+    const nearest = live.active.find(o => o.expiry > now) ?? live.active[0];
     const forward = live.forward || 60_000;
     const tick    = nearest ? nearest.tick_size / 1e9 : 1;
-    const tYears  = nearest
-      ? Math.max((nearest.expiry - Date.now()) / (365.25 * 24 * 3600e3), 1 / 525_960)
+    const tYears  = nearest && nearest.expiry > now
+      ? Math.max((nearest.expiry - now) / (365.25 * 24 * 3600e3), 1 / 525_960)
       : 1 / 48;
     const s = computeStrikes(forward, tYears, tick);
     const bs: Band[] = s.slice(0, -1).map((lo, i) => ({ idx: i, lower: lo, upper: s[i + 1]! }));
