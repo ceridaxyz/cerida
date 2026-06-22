@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
+import { getActiveLadder } from '../../lib/cerida-api'
 
 // ── SVI helpers ──────────────────────────────────────────────────────────────
 const SPREAD  = 0.025
@@ -40,7 +42,22 @@ export default function ExpiryLadder({
   markets,
 }: Props) {
   type Expiry = { label: string; expiry: number; oracleId: string }
-  const expiries = useMemo<Expiry[]>(() => markets ?? [], [markets])
+
+  const { data: ladder } = useQuery({
+    queryKey: ['activeLadder'],
+    queryFn: getActiveLadder,
+    staleTime: 30_000,
+    enabled: !markets,
+  })
+  const expiries = useMemo<Expiry[]>(() => {
+    if (markets) return markets
+    if (!ladder) return []
+    return ladder.map(m => ({
+      label: new Date(m.expiry).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      expiry: m.expiry,
+      oracleId: m.oracleId,
+    }))
+  }, [markets, ladder])
 
   const STEP = useMemo(() => niceStep(currentPrice), [currentPrice])
   const NUM  = 12

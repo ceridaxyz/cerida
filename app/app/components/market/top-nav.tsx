@@ -23,7 +23,9 @@ import {
 } from '@tabler/icons-react'
 import { useQuery } from '@tanstack/react-query'
 import OnboardingModal from '../onboarding-modal'
-import { getActiveLadder, type Market } from '../../lib/cerida-api'
+import { getActiveLadder } from '../../lib/cerida-api'
+import { useActiveMarket } from './active-market-context'
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmtPrice = (p: number) =>
@@ -102,7 +104,7 @@ const TopNav = ({ addOptions = [], onAddWidget, onComboOpen, comboActive }: TopN
   const [copied, setCopied] = useState(false)
   const profileRef = useRef<HTMLDivElement>(null)
   const [marketOpen, setMarketOpen] = useState(false)
-  const [selectedMarket, setSelectedMarket] = useState<Market | null>(null)
+  const { activeMarket, setActiveMarket } = useActiveMarket()
   const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set(['btc']))
   const [marketSearch, setMarketSearch] = useState('')
 
@@ -119,7 +121,6 @@ const TopNav = ({ addOptions = [], onAddWidget, onComboOpen, comboActive }: TopN
     queryFn: getActiveLadder,
     staleTime: 30_000,
   })
-  const activeMarket = selectedMarket ?? ladder?.[0] ?? null
   const btcMarket = ladder?.find(m => m.asset === 'BTC') ?? null
   const btcSpot = btcMarket?.spot ?? null
   const btcBullish = btcMarket ? btcMarket.forward >= btcMarket.spot : true
@@ -324,7 +325,7 @@ useEffect(() => {
                                 return (
                                   <button
                                     key={m.oracleId}
-                                    onClick={() => { setSelectedMarket(m); setMarketOpen(false) }}
+                                    onClick={() => { setActiveMarket(m); setMarketOpen(false) }}
                                     className={`grid grid-cols-[1fr_120px_80px] items-center w-full px-5 py-2.5 text-left transition-colors hover:bg-surface-hover border-b border-border-subtle/30 last:border-0 ${
                                       m.oracleId === activeMarket?.oracleId ? 'bg-surface-hover' : ''
                                     }`}

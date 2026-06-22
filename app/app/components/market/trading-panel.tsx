@@ -13,6 +13,7 @@ import { useComboDispatch } from './combo-context';
 import { useLevels } from './levels-context';
 import { toast } from '../toast/toast-context';
 import { getSurface, getActiveLadder } from '../../lib/cerida-api';
+import { useActiveMarket } from './active-market-context';
 import { CERIDA_PKG, VAULT_ID, toChainPrice, toChainDusdc } from '../../lib/contracts';
 
 const BASE_EDGE = 0.06;
@@ -411,13 +412,15 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
   const sellLabel = isLeverage ? 'SHORT' : 'SELL';
   const actionLabel = direction === 'buy' ? buyLabel : sellLabel;
 
+  const { activeMarket } = useActiveMarket();
+
   // Fetch active ladder to find oracle if not passed in
   const { data: ladder } = useQuery({
     queryKey: ['activeLadder'],
     queryFn: getActiveLadder,
     staleTime: 30_000,
   });
-  const effectiveOracleId = oracle_id ?? ladder?.[0]?.oracleId;
+  const effectiveOracleId = oracle_id ?? activeMarket?.oracleId ?? ladder?.[0]?.oracleId;
 
   // Live YES/NO prices from surface
   const { data: surface } = useQuery({

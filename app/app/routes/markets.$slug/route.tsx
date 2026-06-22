@@ -10,6 +10,7 @@ import TopNav from '../../components/market/top-nav';
 import { ComboProvider, useComboDispatch } from '../../components/market/combo-context';
 import ComboTray from '../../components/market/combo-tray';
 import { LevelsProvider } from '../../components/market/levels-context';
+import { ActiveMarketProvider } from '../../components/market/active-market-context';
 
 export const meta = () => [{ title: 'Trade — Cerida' }];
 
@@ -565,12 +566,14 @@ function TopNavWithCombo({ addOptions, onAddWidget }: { addOptions: { type: stri
 }
 
 const TradePage = () => (
-  <LevelsProvider>
-    <ComboProvider>
-      <TradePageInner />
-      <ComboTray />
-    </ComboProvider>
-  </LevelsProvider>
+  <ActiveMarketProvider>
+    <LevelsProvider>
+      <ComboProvider>
+        <TradePageInner />
+        <ComboTray />
+      </ComboProvider>
+    </LevelsProvider>
+  </ActiveMarketProvider>
 );
 
 export default TradePage;

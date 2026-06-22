@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { IconPlus } from '@tabler/icons-react'
 import { useComboDispatch } from '../market/combo-context'
+import { useActiveMarket } from '../market/active-market-context'
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClientQuery } from '@mysten/dapp-kit'
 import { useQuery } from '@tanstack/react-query'
 import { getChartOracle, getLatestPrice } from '../../lib/predict-api'
@@ -93,16 +94,18 @@ export default function RangeTrading({
   const account = useCurrentAccount()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
 
+  const { activeMarket } = useActiveMarket()
+
   // Real oracle data — falls back to props if provided, otherwise fetches
   const { data: oracle } = useQuery({
     queryKey: ['range-oracle'],
     queryFn: getChartOracle,
     refetchInterval: 60_000,
     staleTime: 30_000,
-    enabled: !oracleIdProp,
+    enabled: !oracleIdProp && !activeMarket,
   })
-  const resolvedOracleId = oracleIdProp ?? oracle?.oracle_id ?? ''
-  const resolvedExpiry = oracleExpiryProp ?? oracle?.expiry ?? Date.now() + 3600_000
+  const resolvedOracleId = oracleIdProp ?? activeMarket?.oracleId ?? oracle?.oracle_id ?? ''
+  const resolvedExpiry = oracleExpiryProp ?? activeMarket?.expiry ?? oracle?.expiry ?? Date.now() + 3600_000
 
   const { data: priceData } = useQuery({
     queryKey: ['range-price', resolvedOracleId],

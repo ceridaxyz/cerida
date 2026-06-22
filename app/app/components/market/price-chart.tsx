@@ -10,9 +10,10 @@ import {
   type UTCTimestamp,
   type IPriceLine,
 } from 'lightweight-charts';
-import { getActiveLadder, getHistory, type HistPoint } from '../../lib/cerida-api';
+import { getHistory, type HistPoint } from '../../lib/cerida-api';
 import { yesNo } from '../../lib/svi';
 import { useLevels } from './levels-context';
+import { useActiveMarket } from './active-market-context';
 
 const POLL_MS       = 4000;
 const TARGET_CANDLES = 48;
@@ -82,8 +83,12 @@ export default function PriceChart() {
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
 
-  const [oid,    setOid]    = useState<string | null>(null)
+  const { activeMarket } = useActiveMarket()
+  const oid = activeMarket?.oracleId ?? null
+
   const [strike, setStrike] = useState<number>(0)
+  // Reset strike when market changes so yesCandles recalculates for new oracle
+  useEffect(() => { setStrike(0) }, [oid])
   const [hdr,    setHdr]    = useState<{ yes: number; chg: number } | null>(null)
   const [err,    setErr]    = useState<string | null>(null)
 
@@ -132,14 +137,6 @@ export default function PriceChart() {
     chartRef.current  = chart
     seriesRef.current = series
     return () => { chart.remove(); chartRef.current = null; seriesRef.current = null }
-  }, [])
-
-  useEffect(() => {
-    let alive = true
-    getActiveLadder()
-      .then(l => alive && l[0] && setOid(l[0].oracleId))
-      .catch(e => alive && setErr(String(e)))
-    return () => { alive = false }
   }, [])
 
   useEffect(() => {
