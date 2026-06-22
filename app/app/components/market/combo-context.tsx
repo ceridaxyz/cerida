@@ -123,29 +123,31 @@ export function ComboProvider({ children }: { children: React.ReactNode }) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+const bi = (v: bigint) => v.toString()
+
 function buildLegSpec(leg: ComboLeg) {
   if (leg.direction === 'range') {
     return {
       kind:          'range',
       oracle_id:     leg.oracle_id ?? '',
       asset:         leg.asset ?? 'BTC',
-      expiry:        leg.expiry ?? 0n,
-      lower_strike:  leg.lower_strike ?? 0n,
-      higher_strike: leg.higher_strike ?? 0n,
-      qty:           leg.qty ?? 1_000_000n,
-      max_cost:      0n,
-      escrow:        leg.escrow ?? 1_000_000n,
+      expiry:        bi(leg.expiry ?? 0n),
+      lower_strike:  bi(leg.lower_strike ?? 0n),
+      higher_strike: bi(leg.higher_strike ?? 0n),
+      qty:           bi(leg.qty ?? 1_000_000n),
+      max_cost:      '0',
+      escrow:        bi(leg.escrow ?? 1_000_000n),
     }
   }
   return {
     kind:      'binary',
     oracle_id: leg.oracle_id ?? '',
     asset:     leg.asset ?? 'BTC',
-    expiry:    leg.expiry ?? 0n,
-    strike:    leg.strike ?? 0n,
+    expiry:    bi(leg.expiry ?? 0n),
+    strike:    bi(leg.strike ?? 0n),
     is_up:     leg.direction === 'yes',
-    qty:       leg.qty ?? 1_000_000n,
-    max_cost:  0n,
-    escrow:    leg.escrow ?? 1_000_000n,
+    qty:       bi(leg.qty ?? 1_000_000n),
+    max_cost:  '0',
+    escrow:    bi(leg.escrow ?? 1_000_000n),
   }
 }
