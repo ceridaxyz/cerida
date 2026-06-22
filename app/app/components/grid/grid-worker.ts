@@ -2,7 +2,7 @@
 
 // ── Constants (mirrors grid-chart.tsx) ──────────────────────────────────────
 const PAD_T = 8, PAD_B = 22, PAD_L = 8, PAD_R = 54;
-const WIN_PAST = 4 * 15 * 60_000;
+const WIN_PAST = 2 * 15 * 60_000;
 const CANDLE_MS = 4_500;
 
 const C = {

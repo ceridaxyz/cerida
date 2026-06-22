@@ -53,9 +53,10 @@ function sigmaForTime(forward: number, t: number): number {
 function computeStrikes(forward: number, tYears: number, tick: number): number[] {
   const sigma = forward * ANNUAL_VOL * Math.sqrt(Math.max(tYears, 1 / 525_960));
   const snap  = (d: number) => Math.round(d / tick) * tick;
+  const f     = snap(forward); // snap forward to tick grid so strikes are clean integers
   const inner = Math.max(tick, snap(sigma * 0.5));
   const outer = Math.max(inner + tick, snap(sigma * 2.5));
-  return [forward - outer, forward - inner, forward + inner, forward + outer];
+  return [f - outer, f - inner, f + inner, f + outer];
 }
 
 function oracleToEpoch(o: Oracle, idx: number): Epoch {

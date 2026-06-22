@@ -127,7 +127,7 @@ export default function GridChart({
 
   const [visBands, setVisBands] = useState(14);
   const [yOffset, setYOffset] = useState(0);
-  const [winFuture, setWinFuture] = useState(6 * EPOCH_MS);
+  const [winFuture, setWinFuture] = useState(3 * EPOCH_MS);
   const [xOffset, setXOffset] = useState(0);
 
   const dragging = useRef(false);
@@ -510,8 +510,8 @@ export default function GridChart({
           <button onClick={() => setXOffset((x) => x - 15_000)} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[9px]" title="Pan left">◀</button>
           <button onClick={() => setXOffset((x) => x + 15_000)} className="flex items-center justify-center w-5 h-5 rounded-[3px] text-text-tertiary hover:text-text-primary text-[9px]" title="Pan right">▶</button>
         </div>
-        {(yOffset !== 0 || xOffset !== 0 || visBands !== 14 || winFuture !== 6 * EPOCH_MS) && (
-          <button onClick={() => { setYOffset(0); setXOffset(0); setVisBands(14); setWinFuture(6 * EPOCH_MS); }}
+        {(yOffset !== 0 || xOffset !== 0 || visBands !== 14 || winFuture !== 3 * EPOCH_MS) && (
+          <button onClick={() => { setYOffset(0); setXOffset(0); setVisBands(14); setWinFuture(3 * EPOCH_MS); }}
             className="text-[10px] text-text-quaternary hover:text-text-tertiary transition-colors">Reset</button>
         )}
         <span className="text-[10px] text-text-quaternary ml-1" style={{ fontFamily: 'var(--font-mono)' }}>

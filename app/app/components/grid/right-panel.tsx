@@ -239,6 +239,7 @@ export default memo(function RightPanel({
     const d = new Date(t);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   };
+  const fmtK = (p: number) => Math.round(p).toLocaleString('en-US');
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -252,7 +253,7 @@ export default memo(function RightPanel({
           {focusedLeg ? (
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-brand-violet font-semibold" style={{ fontFamily: 'var(--font-mono)' }}>
-                ${focusedLeg.lower}–{focusedLeg.upper}
+                ${fmtK(focusedLeg.lower)}–${fmtK(focusedLeg.upper)}
               </span>
               <button
                 onClick={() => setFocusedLegKey(null)}
@@ -347,7 +348,7 @@ export default memo(function RightPanel({
                   <div className="flex flex-col gap-0.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-[12px] font-bold text-text-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-                        ${leg.lower}–${leg.upper}
+                        ${fmtK(leg.lower)}–${fmtK(leg.upper)}
                       </span>
                       <span className="text-[10px] text-text-quaternary bg-white/[0.04] px-1 rounded">
                         {timeStr}
@@ -450,7 +451,7 @@ export default memo(function RightPanel({
                     <div className="absolute inset-0 pointer-events-none animate-pulse" style={{ boxShadow: 'inset 0 0 0 1px rgba(128,125,254,0.3)' }} />
                   )}
                   <span className="relative flex-1 text-[12px] text-text-secondary" style={{ fontFamily: 'var(--font-mono)' }}>
-                    ${band.lower}–{band.upper}
+                    ${fmtK(band.lower)}–${fmtK(band.upper)}
                   </span>
                   <span
                     key={cell.multiplier.toFixed(1)}
