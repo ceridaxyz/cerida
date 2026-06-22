@@ -1,18 +1,9 @@
-import type { Route } from './+types/route.js';
+import { redirect } from 'react-router'
 
-export const meta = (): Route.MetaDescriptors => [
-  { title: 'Markets — Cerida' },
-  { name: 'description', content: 'Prediction markets with leverage' },
-];
+export function loader() {
+  return redirect('/trade')
+}
 
-const HomePage = () => {
-  return (
-    <div className="flex flex-col flex-1 overflow-hidden">
-      {/* <AlertBanner /> */}
-
-      <main className="flex-1 overflow-auto px-6 py-6"></main>
-    </div>
-  );
-};
-
-export default HomePage;
+export default function Home() {
+  return null
+}
