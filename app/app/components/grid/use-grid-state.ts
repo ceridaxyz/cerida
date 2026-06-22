@@ -1,77 +1,83 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { Band, Epoch, GridCell, Leg, PayoffPoint, Stats } from './types';
 import { computePayoff, deriveStats } from './payoff';
+import {
+  getOracles, getActiveLadder, getLatestPrice, getLatestSvi, getPriceHistory,
+} from '../../lib/predict-api';
+import type { Oracle, Svi } from '../../lib/predict-api';
+import { yesNo } from '../../lib/svi';
 
-// ── Tuning ───────────────────────────────────────────────────────────────────
-const EDGE = 0.06; // house edge baked into multipliers
-const UNIT_PAYOUT = 60; // a winning unit pays this notional
-const CENTER = 1674; // anchor price for the strike ladder
-// Wide ladder so the price-anchored viewport always has bands above/below to
-// scroll into; the chart render-filters to the visible price window.
-const NUM_BANDS = 22;
-// Reference 1σ (price units) used to lay out EQUAL-PROBABILITY bands: strikes
-// sit at quantiles of N(CENTER, REF_SIGMA) so each band carries ≈1/N mass at
-// the reference horizon — narrow near the money, wide in the tails. Mirrors
-// windows.move's quantile-inversion band model.
-const REF_SIGMA = 20;
-const EPOCH_MS = 60_000;
-// Wide ladder so the sliding-window chart always has columns to scroll into.
-// Only a handful are on-screen at once; the chart render-filters to the window.
-const NUM_PAST = 6;
-const NUM_FUTURE = 24;
-const TICK_MS = 600;
+// ── Config ────────────────────────────────────────────────────────────────────
+const ANNUAL_VOL    = 0.60;   // fallback vol when SVI is flat (testnet)
+const EDGE          = 0.04;   // spread baked into displayed multiplier
+const UNIT_PAYOUT   = 100;    // display: a winning unit pays $100
+const POLL_MS       = 10_000; // live price refresh
+const HISTORY_LIMIT = 300;
 
-// Normal CDF (Abramowitz–Stegun erf) and its inverse (Acklam probit).
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function erf(x: number): number {
   const t = 1 / (1 + 0.3275911 * Math.abs(x));
   const y =
     1 -
     (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) *
-      t *
-      Math.exp(-x * x));
+      t * Math.exp(-x * x));
   return x >= 0 ? y : -y;
 }
 const normCdf = (x: number) => 0.5 * (1 + erf(x / Math.SQRT2));
 
-function probit(p: number): number {
-  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239];
-  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
-  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
-  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
-  const plow = 0.02425;
-  const phigh = 1 - plow;
-  if (p < plow) {
-    const q = Math.sqrt(-2 * Math.log(p));
-    return (((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!) / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
+// Risk-neutral probability spot expires in [lower, upper].
+// Falls back to log-normal when SVI is flat (testnet b ≈ 0).
+function rangeProb(
+  svi: Svi | null, forward: number,
+  lower: number, upper: number, tYears: number,
+): number {
+  if (forward <= 0 || lower >= upper || tYears <= 0) return 1 / 3;
+  const hasSvi = svi != null && (Math.abs(svi.a) + Math.abs(svi.b)) > 1e-6;
+  if (hasSvi) {
+    const p = yesNo(svi!, forward, lower).yes - yesNo(svi!, forward, upper).yes;
+    return Math.max(0.005, Math.min(0.99, p));
   }
-  if (p <= phigh) {
-    const q = p - 0.5;
-    const r = q * q;
-    return (((((a[0]! * r + a[1]!) * r + a[2]!) * r + a[3]!) * r + a[4]!) * r + a[5]!) * q / (((((b[0]! * r + b[1]!) * r + b[2]!) * r + b[3]!) * r + b[4]!) * r + 1);
-  }
-  const q = Math.sqrt(-2 * Math.log(1 - p));
-  return -(((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!) / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
+  const sigma = forward * ANNUAL_VOL * Math.sqrt(tYears);
+  if (sigma <= 0) return 1 / 3;
+  return Math.max(0.005, Math.min(0.99,
+    normCdf((upper - forward) / sigma) - normCdf((lower - forward) / sigma),
+  ));
 }
 
-// Exact probability that price settles within [lower, higher) under N(price, sigma).
-function bandProb(lower: number, higher: number, price: number, sigma: number): number {
-  const p = normCdf((higher - price) / sigma) - normCdf((lower - price) / sigma);
-  return Math.max(0.005, Math.min(0.95, p));
+function sigmaForTime(forward: number, t: number): number {
+  const tYears = Math.max((t - Date.now()) / (365.25 * 24 * 3600e3), 0);
+  return Math.max(1, forward * ANNUAL_VOL * Math.sqrt(tYears));
 }
 
-// Diffusion sigma (in price units) as a function of horizon — drives both the
-// per-band probabilities and the expected-move cone. Grows ~√t.
-export function sigmaForHorizon(epochsAhead: number): number {
-  return 3 + 2.2 * Math.sqrt(Math.max(0, epochsAhead));
+// Sigma-adjusted strikes: [outer_lo, inner_lo, inner_hi, outer_hi]
+function computeStrikes(forward: number, tYears: number, tick: number): number[] {
+  const sigma = forward * ANNUAL_VOL * Math.sqrt(Math.max(tYears, 1 / 525_960));
+  const snap  = (d: number) => Math.round(d / tick) * tick;
+  const inner = Math.max(tick, snap(sigma * 0.5));
+  const outer = Math.max(inner + tick, snap(sigma * 2.5));
+  return [forward - outer, forward - inner, forward + inner, forward + outer];
 }
 
-// Deterministic, stable settlement price for a past epoch (no flicker).
-function settlementPrice(epochStart: number): number {
-  const seed = Math.sin(epochStart * 0.0013) * 43758.5453;
-  const frac = seed - Math.floor(seed);
-  return CENTER + (frac - 0.5) * (REF_SIGMA * 2.8);
+function oracleToEpoch(o: Oracle, idx: number): Epoch {
+  return {
+    id: o.oracle_id, oracleId: o.oracle_id, idx,
+    start: o.expiry - 30 * 60_000,
+    end:   o.expiry,
+  };
 }
 
+// ── Live data ─────────────────────────────────────────────────────────────────
+interface LiveData {
+  active:  Oracle[];
+  settled: Oracle[];
+  forward: number;
+  spot:    number;
+  svi:     Svi | null;
+  history: { t: number; price: number }[];
+}
+const EMPTY: LiveData = { active: [], settled: [], forward: 0, spot: 0, svi: null, history: [] };
+
+// ── Public interface ──────────────────────────────────────────────────────────
 export interface GridState {
   strikes: number[];
   bands: Band[];
@@ -83,9 +89,7 @@ export interface GridState {
   focusedEpoch: string;
   setFocusedEpoch: (id: string) => void;
   cellFor: (epoch: Epoch, band: Band) => GridCell;
-  // Expected-move cone: ±1σ price half-width at a future timestamp.
   sigmaAtTime: (t: number) => number;
-  // Settlement price for a past epoch (null if not yet settled).
   settleOf: (epoch: Epoch) => number | null;
   legs: Map<string, Leg>;
   hasLeg: (key: string) => boolean;
@@ -103,254 +107,194 @@ export interface GridState {
 }
 
 export function useGridState(): GridState {
-  // Equal-probability strike ladder: boundaries at quantiles of N(CENTER, REF_SIGMA),
-  // so each band carries ≈1/N mass — narrow near the money, wide in the tails.
-  const strikes = useMemo(() => {
-    const eps = 0.4 / NUM_BANDS;
-    return Array.from({ length: NUM_BANDS + 1 }, (_, i) => {
-      const p = eps + (1 - 2 * eps) * (i / NUM_BANDS);
-      return Math.round(CENTER + REF_SIGMA * probit(p));
-    });
+  const [live, setLive]   = useState<LiveData>(EMPTY);
+  const [now, setNow]     = useState(() => Date.now());
+  const [stake, setStake] = useState(10);
+  const [focusedEpoch, setFocusedEpoch] = useState('');
+  const histFetched = useRef(false);
+
+  // ── Fetch loop ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    async function refresh() {
+      try {
+        const [all, active] = await Promise.all([getOracles(), getActiveLadder()]);
+        const settled = all
+          .filter(o => o.status === 'settled' && o.underlying_asset === 'BTC')
+          .sort((a, b) => b.expiry - a.expiry)
+          .slice(0, 4);
+
+        const nearest = active[0];
+        if (!nearest) { setLive(l => ({ ...l, active, settled })); setNow(Date.now()); return; }
+
+        const [price, svi] = await Promise.all([
+          getLatestPrice(nearest.oracle_id),
+          getLatestSvi(nearest.oracle_id).catch(() => null),
+        ]);
+
+        setLive(prev => ({
+          active, settled,
+          forward: price.forward, spot: price.spot, svi,
+          history: prev.history,
+        }));
+
+        if (!histFetched.current) {
+          histFetched.current = true;
+          getPriceHistory(nearest.oracle_id, HISTORY_LIMIT)
+            .then(pts => setLive(l => ({ ...l, history: pts.map(p => ({ t: p.t, price: p.spot })) })))
+            .catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[grid] refresh error:', e);
+      }
+      setNow(Date.now());
+    }
+
+    refresh();
+    const id = setInterval(refresh, POLL_MS);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Manual stake ($ per band/leg) — drives cost/payout everywhere.
-  const [stake, setStake] = useState(10);
-
-  const bands = useMemo<Band[]>(
-    () =>
-      strikes.slice(0, -1).map((lo, i) => ({
-        idx: i,
-        lower: lo,
-        upper: strikes[i + 1]!,
-      })),
-    [strikes],
-  );
-
-  // Live price — random walk, with a short rolling history for the chart line.
-  const [price, setPrice] = useState(CENTER + 0.6);
-  const [now, setNow] = useState(() => Date.now());
-  const [history, setHistory] = useState<{ t: number; price: number }[]>(() => [
-    { t: Date.now(), price: CENTER + 0.6 },
-  ]);
-
   useEffect(() => {
-    const id = setInterval(() => {
-      const t = Date.now();
-      setPrice((p) => {
-        // Mean-reverting walk: keeps price near CENTER so it stays on the
-        // strike ladder while the viewport scrolls vertically around it.
-        const next = p + (CENTER - p) * 0.04 + (Math.random() - 0.5) * 1.8;
-        setHistory((h) => [...h.slice(-600), { t, price: next }]);
-        return next;
-      });
-      setNow(t);
-    }, TICK_MS);
+    const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
 
-  // Rolling epoch ladder anchored on the current minute, so the chart never runs
-  // out of future columns as wall-clock time advances. Ids are absolute (epoch
-  // index) so leg keys stay valid as columns scroll from future → past.
-  const nowBucket = Math.floor(now / EPOCH_MS);
-  const epochs = useMemo<Epoch[]>(
-    () =>
-      Array.from({ length: NUM_PAST + NUM_FUTURE + 1 }, (_, k) => {
-        const idxAbs = nowBucket - NUM_PAST + k;
-        const start = idxAbs * EPOCH_MS;
-        return { id: `e${idxAbs}`, idx: k, start, end: start + EPOCH_MS };
-      }),
-    [nowBucket],
-  );
+  // ── Epochs ──────────────────────────────────────────────────────────────────
+  const epochs = useMemo<Epoch[]>(() => {
+    const past = live.settled.map((o, i) => oracleToEpoch(o, -(live.settled.length - i)));
+    const curr = live.active.map((o, i) => oracleToEpoch(o, i));
+    return [...past, ...curr];
+  }, [live.active, live.settled]);
 
   const currentEpochId = useMemo(() => {
-    const e = epochs.find((ep) => now >= ep.start && now < ep.end);
-    return e ? e.id : null;
-  }, [epochs, now]);
+    const n = Date.now();
+    return epochs.find(e => e.start <= n && n < e.end)?.id ?? epochs[epochs.length - 1]?.id ?? null;
+  }, [epochs]);
 
-  const [focusedEpoch, setFocusedEpoch] = useState<string>(() => {
-    const firstFuture = epochs.find((e) => e.idx === NUM_PAST);
-    return firstFuture ? firstFuture.id : epochs[0]!.id;
-  });
+  useEffect(() => {
+    if (!focusedEpoch && currentEpochId) setFocusedEpoch(currentEpochId);
+  }, [focusedEpoch, currentEpochId]);
 
-  // ── Legs (shared selection) ────────────────────────────────────────────────
+  // ── Bands ────────────────────────────────────────────────────────────────────
+  const { strikes, bands } = useMemo(() => {
+    const nearest = live.active[0];
+    const forward = live.forward || 60_000;
+    const tick    = nearest ? nearest.tick_size / 1e9 : 1;
+    const tYears  = nearest
+      ? Math.max((nearest.expiry - Date.now()) / (365.25 * 24 * 3600e3), 1 / 525_960)
+      : 1 / 48;
+    const s = computeStrikes(forward, tYears, tick);
+    const bs: Band[] = s.slice(0, -1).map((lo, i) => ({ idx: i, lower: lo, upper: s[i + 1]! }));
+    return { strikes: s, bands: bs };
+  }, [live.forward, live.active]);
+
+  // ── Legs ────────────────────────────────────────────────────────────────────
   const [legs, setLegs] = useState<Map<string, Leg>>(new Map());
+  const liveRef  = useRef(live);  liveRef.current  = live;
+  const nowRef   = useRef(now);   nowRef.current   = now;
+  const stakeRef = useRef(stake); stakeRef.current = stake;
 
   const hasLeg = useCallback((key: string) => legs.has(key), [legs]);
 
-  const addLeg = useCallback(
-    (epoch: Epoch, band: Band) => {
-      const key = `${epoch.id}:${band.idx}`;
-      setLegs((prev) => {
-        if (prev.has(key)) return prev;
-        const epochsAhead = Math.max(1, (epoch.end - Date.now()) / EPOCH_MS);
-        const sigma = sigmaForHorizon(epochsAhead);
-        const prob = bandProb(band.lower, band.upper, price, sigma);
-        const multiplier = (1 - EDGE) / prob;
-        const next = new Map(prev);
-        next.set(key, {
-          key,
-          epochId: epoch.id,
-          bandIdx: band.idx,
-          lower: band.lower,
-          upper: band.upper,
-          qty: 1,
-          cost: stakeRef.current,
-          multiplier,
-        });
-        return next;
+  const addLeg = useCallback((epoch: Epoch, band: Band) => {
+    const key = `${epoch.id}:${band.idx}`;
+    setLegs(prev => {
+      if (prev.has(key)) return prev;
+      const { svi, forward } = liveRef.current;
+      const tYears = Math.max((epoch.end - Date.now()) / (365.25 * 24 * 3600e3), 1 / 525_960);
+      const prob = rangeProb(svi, forward, band.lower, band.upper, tYears);
+      const multiplier = (1 - EDGE) / prob;
+      const n = new Map(prev);
+      n.set(key, {
+        key, epochId: epoch.id, bandIdx: band.idx,
+        lower: band.lower, upper: band.upper,
+        qty: 1, cost: stakeRef.current, multiplier,
       });
-    },
-    [price],
-  );
-
-  const removeLeg = useCallback((key: string) => {
-    setLegs((prev) => {
-      if (!prev.has(key)) return prev;
-      const next = new Map(prev);
-      next.delete(key);
-      return next;
+      return n;
     });
   }, []);
 
-  const toggleLeg = useCallback(
-    (epoch: Epoch, band: Band) => {
-      const key = `${epoch.id}:${band.idx}`;
-      if (legs.has(key)) removeLeg(key);
-      else addLeg(epoch, band);
-    },
-    [legs, addLeg, removeLeg],
-  );
+  const removeLeg = useCallback((key: string) => setLegs(p => {
+    if (!p.has(key)) return p;
+    const n = new Map(p); n.delete(key); return n;
+  }), []);
 
-  const clearLegs = useCallback(() => setLegs(new Map()), []);
+  const toggleLeg = useCallback((epoch: Epoch, band: Band) => {
+    const key = `${epoch.id}:${band.idx}`;
+    if (legs.has(key)) removeLeg(key); else addLeg(epoch, band);
+  }, [legs, addLeg, removeLeg]);
 
-  const updateLegCost = useCallback((key: string, cost: number) => {
-    setLegs((prev) => {
-      const leg = prev.get(key);
-      if (!leg) return prev;
-      const next = new Map(prev);
-      next.set(key, { ...leg, cost: Math.max(0, cost) });
-      return next;
-    });
-  }, []);
-
-  const updateAllLegCosts = useCallback((cost: number) => {
-    setLegs((prev) => {
-      if (prev.size === 0) return prev;
-      const safeC = Math.max(0, cost);
-      const next = new Map(prev);
-      for (const [k, leg] of prev) next.set(k, { ...leg, cost: safeC });
-      return next;
-    });
-  }, []);
+  const clearLegs         = useCallback(() => setLegs(new Map()), []);
+  const updateLegCost     = useCallback((key: string, cost: number) => setLegs(p => {
+    const leg = p.get(key); if (!leg) return p;
+    const n = new Map(p); n.set(key, { ...leg, cost: Math.max(0, cost) }); return n;
+  }), []);
+  const updateAllLegCosts = useCallback((cost: number) => setLegs(p => {
+    if (!p.size) return p;
+    const n = new Map(p);
+    for (const [k, l] of p) n.set(k, { ...l, cost: Math.max(0, cost) });
+    return n;
+  }), []);
 
   // ── Cell derivation ─────────────────────────────────────────────────────────
-  // Keep a live price ref so cellFor reflects the latest tick without
-  // re-creating the callback every frame.
-  const priceRef = useRef(price);
-  priceRef.current = price;
-  const nowRef = useRef(now);
-  nowRef.current = now;
-  const stakeRef = useRef(stake);
-  stakeRef.current = stake;
+  const cellFor = useCallback((epoch: Epoch, band: Band): GridCell => {
+    const { svi, forward, spot, active, settled } = liveRef.current;
+    const tNow   = nowRef.current;
+    const tYears = Math.max((epoch.end - tNow) / (365.25 * 24 * 3600e3), 1 / 525_960);
+    const liveProb   = rangeProb(svi, forward, band.lower, band.upper, tYears);
+    const key        = `${epoch.id}:${band.idx}`;
+    const leg        = legs.get(key);
+    const multiplier = leg ? leg.multiplier : (1 - EDGE) / liveProb;
+    const prob       = leg ? (1 - EDGE) / leg.multiplier : liveProb;
+    const cost       = Math.round((UNIT_PAYOUT / multiplier) * 100) / 100;
 
-  const cellFor = useCallback(
-    (epoch: Epoch, band: Band): GridCell => {
-      const p = priceRef.current;
-      const tNow = nowRef.current;
-      const epochsAhead = Math.max(1, (epoch.end - tNow) / EPOCH_MS);
-      const sigma = sigmaForHorizon(epochsAhead);
-      const liveProb = bandProb(band.lower, band.upper, p, sigma);
-      const key = `${epoch.id}:${band.idx}`;
-      const leg = legs.get(key);
+    const isPast    = epoch.end <= tNow;
+    const isActive  = epoch.start <= tNow && tNow < epoch.end;
+    const px        = spot || forward;
+    const inBandNow = px >= band.lower && px < band.upper;
 
-      // Once you hold a leg, its price is LOCKED at entry — show the leg's
-      // captured multiplier, not a live-recomputed one. Empty cells stay live.
-      const multiplier = leg ? leg.multiplier : (1 - EDGE) / liveProb;
-      const prob = leg ? (1 - EDGE) / leg.multiplier : liveProb;
-      const cost = Math.round((UNIT_PAYOUT / multiplier) * 100) / 100;
+    const oracle   = [...settled, ...active].find(o => o.oracle_id === epoch.oracleId);
+    const settlePx = oracle?.settlement_price != null ? oracle.settlement_price / 1e9 : null;
 
-      const started = epoch.start <= tNow && tNow < epoch.end;
-      const isPast = epoch.end <= tNow;
-      const inBand = p >= band.lower && p < band.upper;
+    let state: GridCell['state'] = 'available';
+    let uPnl: number | undefined;
 
-      let state: GridCell['state'] = 'available';
-      let uPnl: number | undefined;
-      if (isPast) {
-        // Settled epoch: the band holding the settlement price wins. A winning
-        // band you hold a leg in is CLAIMABLE — the keeper has redeemed the
-        // Predict hedge into vault.settlements; you call claim_window_bet.
-        const settle = settlementPrice(epoch.start);
-        const winner = settle >= band.lower && settle < band.upper;
-        if (winner && leg) {
-          state = 'claimable';
-          uPnl = leg.cost * (leg.multiplier - 1);
-        } else {
-          state = winner ? 'won' : 'lost';
-        }
-      } else if (leg) {
-        if (started) {
-          state = 'active';
-          uPnl = inBand ? leg.cost * (leg.multiplier - 1) : -leg.cost;
-        } else {
-          state = 'selected';
-        }
-      }
+    if (isPast && settlePx != null) {
+      const winner = settlePx >= band.lower && settlePx < band.upper;
+      if (winner && leg) { state = 'claimable'; uPnl = leg.cost * (leg.multiplier - 1); }
+      else state = winner ? 'won' : 'lost';
+    } else if (isPast) {
+      state = 'expired';
+    } else if (leg) {
+      state = isActive ? 'active' : 'selected';
+      if (isActive) uPnl = inBandNow ? leg.cost * (leg.multiplier - 1) : -leg.cost;
+    }
 
-      return {
-        epochId: epoch.id,
-        bandIdx: band.idx,
-        lower: band.lower,
-        upper: band.upper,
-        prob,
-        multiplier,
-        cost, // per-unit market ask (BandPanel/market info); stake is the bet size
-        state,
-        uPnl,
-      };
-    },
-    [legs],
-  );
+    return { epochId: epoch.id, bandIdx: band.idx, lower: band.lower, upper: band.upper, prob, multiplier, cost, state, uPnl };
+  }, [legs]);
 
-  const sigmaAtTime = useCallback(
-    (t: number) => sigmaForHorizon((t - nowRef.current) / EPOCH_MS),
-    [],
-  );
+  const sigmaAtTime = useCallback((t: number) =>
+    sigmaForTime(liveRef.current.forward || 60_000, t), []);
 
-  const settleOf = useCallback(
-    (epoch: Epoch) =>
-      epoch.end <= nowRef.current ? settlementPrice(epoch.start) : null,
-    [],
-  );
+  const settleOf = useCallback((epoch: Epoch): number | null => {
+    const oracle = [...liveRef.current.settled, ...liveRef.current.active]
+      .find(o => o.oracle_id === epoch.oracleId);
+    return oracle?.settlement_price != null ? oracle.settlement_price / 1e9 : null;
+  }, []);
 
-  const legsArr = useMemo(() => [...legs.values()], [legs]);
+  const legsArr      = useMemo(() => [...legs.values()], [legs]);
   const payoffPoints = useMemo(() => computePayoff(legsArr), [legsArr]);
-  const stats = useMemo(() => deriveStats(legsArr), [legsArr]);
+  const stats        = useMemo(() => deriveStats(legsArr), [legsArr]);
 
   return {
-    strikes,
-    bands,
-    epochs,
-    now,
-    price,
-    history,
-    currentEpochId,
-    focusedEpoch,
-    setFocusedEpoch,
-    cellFor,
-    sigmaAtTime,
-    settleOf,
-    legs,
-    hasLeg,
-    toggleLeg,
-    addLeg,
-    removeLeg,
-    updateLegCost,
-    updateAllLegCosts,
-    clearLegs,
-    legsArr,
-    payoffPoints,
-    stats,
-    stake,
-    setStake,
+    strikes, bands, epochs, now,
+    price:   live.spot || live.forward || 0,
+    history: live.history,
+    currentEpochId, focusedEpoch, setFocusedEpoch,
+    cellFor, sigmaAtTime, settleOf,
+    legs, hasLeg, toggleLeg, addLeg, removeLeg,
+    updateLegCost, updateAllLegCosts, clearLegs,
+    legsArr, payoffPoints, stats, stake, setStake,
   };
 }
