@@ -27,26 +27,6 @@ function heatColor(t: number) {
   return `rgba(${Math.round(96 + t * 159)},${Math.round(92 + t * 96)},${Math.round(255 - t * 225)},${a.toFixed(2)})`
 }
 
-// ── Generate demo hourly expiries for today ──────────────────────────────────
-function todayExpiries(): { label: string; expiry: number; oracleId: string }[] {
-  const now  = Date.now()
-  const base = new Date()
-  base.setMinutes(0, 0, 0)
-  const results = []
-  for (let h = base.getHours(); h <= 23; h++) {
-    const t = new Date(base)
-    t.setHours(h)
-    if (t.getTime() > now + 2 * 60_000) {
-      results.push({
-        label: t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        expiry: t.getTime(),
-        oracleId: `demo-btc-${h}`,
-      })
-    }
-    if (results.length >= 6) break
-  }
-  return results
-}
 
 interface Props {
   currentPrice?: number
@@ -59,7 +39,8 @@ export default function ExpiryLadder({
   underlying = 'BTC',
   markets,
 }: Props) {
-  const expiries = useMemo(() => markets ?? todayExpiries(), [markets])
+  type Expiry = { label: string; expiry: number; oracleId: string }
+  const expiries = useMemo<Expiry[]>(() => markets ?? [], [markets])
 
   const STEP = useMemo(() => niceStep(currentPrice), [currentPrice])
   const NUM  = 12

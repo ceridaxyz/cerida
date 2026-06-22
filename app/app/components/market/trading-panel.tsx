@@ -26,9 +26,11 @@ const barH = (step: number) => 5 + (step / STEPS) * 27;
 function LeverageSlider({
   value,
   onChange,
+  maxValue = MAX_LEV,
 }: {
   value: number;
   onChange: (v: number) => void;
+  maxValue?: number;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const thumbX = useMotionValue(0);
@@ -38,7 +40,7 @@ function LeverageSlider({
   const getW = () => trackRef.current?.clientWidth ?? 0;
   const levToX = (lev: number) => ((lev - MIN_LEV) / STEPS) * getW();
   const xToLev = (x: number) =>
-    Math.round(Math.max(0, Math.min(1, x / (getW() || 1))) * STEPS) + MIN_LEV;
+    Math.min(maxValue, Math.round(Math.max(0, Math.min(1, x / (getW() || 1))) * STEPS) + MIN_LEV);
 
   useEffect(() => {
     if (!dragging.current) thumbX.set(levToX(value));
@@ -46,16 +48,17 @@ function LeverageSlider({
 
   const springTo = useCallback(
     (lev: number) => {
-      onChange(lev);
-      animate(thumbX, levToX(lev), {
+      const clamped = Math.min(maxValue, lev);
+      onChange(clamped);
+      animate(thumbX, levToX(clamped), {
         type: 'spring',
         stiffness: 600,
         damping: 38,
         mass: 0.4,
       });
     },
-    [onChange],
-  ); // eslint-disable-line react-hooks/exhaustive-deps
+    [onChange, maxValue], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const handleThumbDown = (e: React.PointerEvent) => {
     e.stopPropagation();
@@ -66,7 +69,7 @@ function LeverageSlider({
     const onMove = (e: PointerEvent) => {
       const nx = Math.max(
         0,
-        Math.min(getW(), origin.x + e.clientX - origin.clientX),
+        Math.min(levToX(maxValue), origin.x + e.clientX - origin.clientX),
       );
       thumbX.set(nx);
       onChange(xToLev(nx));
@@ -76,7 +79,7 @@ function LeverageSlider({
       setShowHandle(false);
       const nx = Math.max(
         0,
-        Math.min(getW(), origin.x + e.clientX - origin.clientX),
+        Math.min(levToX(maxValue), origin.x + e.clientX - origin.clientX),
       );
       springTo(xToLev(nx));
       window.removeEventListener('pointermove', onMove);
@@ -141,7 +144,7 @@ function LeverageSlider({
         }}
         onClick={(e) => {
           const rect = trackRef.current!.getBoundingClientRect();
-          springTo(xToLev(e.clientX - rect.left));
+          springTo(Math.min(maxValue, xToLev(e.clientX - rect.left)));
         }}
       >
         <div style={{ position: 'absolute', inset: '0 0 18px 0' }}>
@@ -313,19 +316,20 @@ function LeverageSlider({
               key={lev}
               onClick={(e) => {
                 e.stopPropagation();
-                springTo(lev);
+                springTo(Math.min(maxValue, lev));
               }}
+              disabled={lev > maxValue}
               style={{
                 position: 'absolute',
                 left: `${((lev - MIN_LEV) / STEPS) * 100}%`,
                 transform: 'translateX(-50%)',
                 background: 'none',
                 border: 'none',
-                cursor: 'pointer',
+                cursor: lev > maxValue ? 'default' : 'pointer',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10,
                 fontWeight: lev === value ? 600 : 500,
-                color: lev === value ? '#9998ff' : 'rgba(255,255,255,0.35)',
+                color: lev > maxValue ? 'rgba(255,255,255,0.12)' : lev === value ? '#9998ff' : 'rgba(255,255,255,0.35)',
                 padding: 0,
                 lineHeight: 1,
                 transition: 'color 0.15s',
@@ -718,8 +722,8 @@ const TradingPanel = ({ oracle_id, asset = 'BTC', expiry, strike }: TradingPanel
           </button>
         </div>
 
-        {/* Leverage slider */}
-        <LeverageSlider value={leverage} onChange={setLeverage} />
+        {/* Leverage slider — capped at 3x until full product launch */}
+        <LeverageSlider value={leverage} onChange={setLeverage} maxValue={3} />
 
         {/* Take profit / Stop loss toggle */}
         <div className="flex items-center justify-between">
